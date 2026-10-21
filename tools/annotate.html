@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>annotate — handwritten digits</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --panel: #1f2229;
+    --edge: #2e323b;
+    --text: #e6e6e6;
+    --dim: #9aa0ab;
+    --accent: #4d9de0;
+    --error: #e06c5a;
+    --ok: #6cc08a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--edge);
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row strong { font-size: 14px; }
+  #filename { color: var(--dim); font-family: ui-monospace, monospace; }
+  .spacer { flex: 1; }
+  button {
+    background: #2a2e37;
+    color: var(--text);
+    border: 1px solid var(--edge);
+    border-radius: 5px;
+    padding: 4px 9px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #343945; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  kbd {
+    background: #2a2e37;
+    border: 1px solid var(--edge);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0 5px;
+    font: 11px ui-monospace, monospace;
+    color: var(--dim);
+  }
+  #status { color: var(--dim); }
+  #status.error { color: var(--error); }
+  #status.ok { color: var(--ok); }
+  #palette { gap: 5px; }
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    border: 1px solid var(--edge);
+    background: #22262e;
+    cursor: pointer;
+  }
+  .chip.on { border-color: var(--chip); background: #2b303a; }
+  .chip .sw { width: 10px; height: 10px; border-radius: 50%; }
+  .chip kbd { padding: 0 4px; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #canvas-wrap {
+    flex: 1;
+    overflow: auto;
+    padding: 18px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    background:
+      repeating-conic-gradient(#191b20 0% 25%, #16181d 0% 50%) 0 / 24px 24px;
+  }
+  canvas {
+    image-rendering: pixelated;
+    cursor: crosshair;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.55);
+  }
+  aside {
+    width: 270px;
+    border-left: 1px solid var(--edge);
+    background: var(--panel);
+    overflow-y: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  aside h3 {
+    margin: 6px 0 2px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  #boxlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+  #boxlist li {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 7px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  #boxlist li:hover { background: #262a33; }
+  #boxlist li.sel { border-color: var(--accent); background: #262a33; }
+  #boxlist .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  #boxlist small { color: var(--dim); margin-left: auto; }
+  #boxlist button { padding: 0 6px; line-height: 18px; border: none; background: none; color: var(--dim); }
+  #boxlist button:hover { color: var(--error); background: none; }
+  #help { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; color: var(--dim); }
+  #help li { display: flex; gap: 8px; }
+  #help kbd { flex: none; min-width: 58px; text-align: center; }
+  #empty-note { color: var(--dim); font-style: italic; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="row">
+    <strong>annotate</strong>
+    <span id="filename">…</span>
+    <span class="spacer"></span>
+    <span id="progress">0 / 0</span>
+    <span id="dirty-flag" style="color:var(--accent)"></span>
+  </div>
+  <div class="row">
+    <button id="btn-prev">← prev</button>
+    <button id="btn-next">next →</button>
+    <button id="btn-save-next">save &amp; next <kbd>⏎</kbd></button>
+    <button id="btn-empty">mark empty <kbd>x</kbd></button>
+    <button id="btn-undo">undo <kbd>z</kbd></button>
+    <button id="btn-del">delete box <kbd>⌫</kbd></button>
+    <button id="btn-filter">hide done <kbd>f</kbd></button>
+    <button id="btn-zoom-out">− <kbd>[</kbd></button>
+    <span id="zoom-label" style="color:var(--dim)"></span>
+    <button id="btn-zoom-in">+ <kbd>]</kbd></button>
+    <span class="spacer"></span>
+    <span id="status"></span>
+  </div>
+  <div class="row" id="palette"></div>
+</header>
+
+<main>
+  <div id="canvas-wrap"><canvas id="cv"></canvas></div>
+  <aside>
+    <h3>boxes</h3>
+    <ul id="boxlist"></ul>
+    <div id="empty-note"></div>
+    <h3>keys</h3>
+    <ul id="help">
+      <li><kbd>drag</kbd><span>draw box (gets the current class)</span></li>
+      <li><kbd>click</kbd><span>select box</span></li>
+      <li><kbd>drag box</kbd><span>move</span></li>
+      <li><kbd>drag handle</kbd><span>resize</span></li>
+      <li><kbd>right-click</kbd><span>delete box</span></li>
+      <li><kbd>0-9 . -</kbd><span>class (selected box + current)</span></li>
+      <li><kbd>← → / a d</kbd><span>prev / next crop</span></li>
+      <li><kbd>⏎</kbd><span>save &amp; next</span></li>
+      <li><kbd>x</kbd><span>mark empty / ignored</span></li>
+      <li><kbd>z</kbd><span>undo</span></li>
+      <li><kbd>esc</kbd><span>deselect / cancel drag</span></li>
+      <li><kbd>ctrl+s</kbd><span>save now</span></li>
+    </ul>
+  </aside>
+</main>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  classes: [],
+  shortcutMap: {},
+  images: [],
+  skipDone: localStorage.getItem("annotate.skipDone") === "1",
+  index: 0,
+  boxes: [],            // {cls, x, y, w, h} in image pixels
+  selected: -1,
+  currentClass: null,
+  undoStack: [],
+  zoom: 8,
+  zoomInit: localStorage.getItem("annotate.zoom") !== null,
+  img: null,
+  dirty: false,
+  op: null,             // in-progress mouse operation
+  saveTimer: null,
+};
+
+if (state.zoomInit) state.zoom = Number(localStorage.getItem("annotate.zoom")) || 8;
+
+// ---------------------------------------------------------------- colours
+
+function classColor(cls, alpha = 1) {
+  if (cls === null || cls === undefined) return `rgba(150,150,150,${alpha})`;
+  const h = Math.round((cls * 137.508) % 360);
+  return `hsla(${h}, 65%, 52%, ${alpha})`;
+}
+
+function shortcutFor(name) {
+  if (name === "dot") return ".";
+  if (name === "dash") return "-";
+  return name.length === 1 ? name : null;
+}
+
+// ---------------------------------------------------------------- data io
+
+async function fetchJSON(url, opts) {
+  const res = await fetch(url, opts);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("failed to load image"));
+    img.src = url;
+  });
+}
+
+function view() {
+  return state.skipDone ? state.images.filter((e) => !e.done) : state.images;
+}
+
+function entry() {
+  return view()[state.index] || null;
+}
+
+async function loadList() {
+  const [cls, listing] = await Promise.all([
+    fetchJSON("/api/classes"),
+    fetchJSON("/api/list"),
+  ]);
+  state.classes = cls.classes;
+  state.shortcutMap = {};
+  state.classes.forEach((name, i) => {
+    const s = shortcutFor(name);
+    if (s !== null && !(s in state.shortcutMap)) state.shortcutMap[s] = i;
+  });
+  state.images = listing.images;
+  buildPalette();
+  const last = localStorage.getItem("annotate.lastPath");
+  const entries = view();
+  const idx = entries.findIndex((e) => e.path === last);
+  state.index = idx >= 0 ? idx : 0;
+  await loadCurrent();
+}
+
+async function loadCurrent() {
+  const e = entry();
+  state.boxes = [];
+  state.selected = -1;
+  state.undoStack = [];
+  state.dirty = false;
+  if (!e) {
+    state.img = null;
+    renderChrome();
+    render();
+    setStatus(
+      state.images.length
+        ? "nothing left in this view — press f to show done crops"
+        : "no images found",
+    );
+    return;
+  }
+  localStorage.setItem("annotate.lastPath", e.path);
+  try {
+    const [labels, img] = await Promise.all([
+      fetchJSON("/api/labels?path=" + encodeURIComponent(e.path)),
+      loadImage("/api/image?path=" + encodeURIComponent(e.path)),
+    ]);
+    state.img = img;
+    state.boxes = labels.boxes.map((b) => ({
+      cls: b.cls,
+      x: (b.cx - b.w / 2) * img.width,
+      y: (b.cy - b.h / 2) * img.height,
+      w: b.w * img.width,
+      h: b.h * img.height,
+    }));
+    if (!state.zoomInit && img.height > 0) {
+      state.zoom = Math.min(16, Math.max(2, Math.floor(420 / img.height)));
+      state.zoomInit = true;
+    }
+    setStatus("");
+  } catch (err) {
+    state.img = null;
+    setStatus("load failed: " + err.message, "error");
+  }
+  renderChrome();
+  render();
+}
+
+async function save() {
+  clearTimeout(state.saveTimer);
+  state.saveTimer = null;
+  const e = entry();
+  if (!e || !state.img) return true;
+  const unassigned = state.boxes.filter((b) => b.cls === null).length;
+  if (unassigned > 0) {
+    setStatus(
+      `⚠ ${unassigned} box${unassigned === 1 ? "" : "es"} without a class — press 0-9, . or -`,
+      "error",
+    );
+    return false;
+  }
+  const iw = state.img.width, ih = state.img.height;
+  const boxes = state.boxes.map((b) => ({
+    cls: b.cls,
+    cx: +((b.x + b.w / 2) / iw).toFixed(6),
+    cy: +((b.y + b.h / 2) / ih).toFixed(6),
+    w: +(b.w / iw).toFixed(6),
+    h: +(b.h / ih).toFixed(6),
+  }));
+  try {
+    await fetchJSON("/api/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: e.path, boxes }),
+    });
+    state.dirty = false;
+    e.done = true;
+    e.has_labels = boxes.length > 0;
+    setStatus(`saved ${boxes.length} box${boxes.length === 1 ? "" : "es"} ✓`, "ok");
+    renderChrome();
+    return true;
+  } catch (err) {
+    setStatus("save failed: " + err.message, "error");
+    return false;
+  }
+}
+
+async function flushSave() {
+  return state.dirty || state.saveTimer ? await save() : true;
+}
+
+function scheduleSave() {
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(save, 600);
+}
+
+async function navigate(delta) {
+  if (!(await flushSave())) return;
+  const entries = view();
+  const next = state.index + delta;
+  if (next < 0 || next >= entries.length) {
+    setStatus(delta > 0 ? "last crop" : "first crop");
+    return;
+  }
+  state.index = next;
+  await loadCurrent();
+}
+
+async function markEmpty() {
+  const e = entry();
+  if (!e) return;
+  if (
+    state.boxes.length > 0 &&
+    !confirm(`Discard ${state.boxes.length} box(es) and mark this crop empty/ignored?`)
+  ) {
+    return;
+  }
+  state.boxes = [];
+  state.selected = -1;
+  state.dirty = true;
+  if (await save()) await navigate(1);
+}
+
+async function toggleFilter() {
+  if (!(await flushSave())) return;
+  const cur = entry() ? entry().path : null;
+  state.skipDone = !state.skipDone;
+  localStorage.setItem("annotate.skipDone", state.skipDone ? "1" : "0");
+  const entries = view();
+  const idx = cur ? entries.findIndex((e) => e.path === cur) : -1;
+  state.index = idx >= 0 ? idx : 0;
+  renderChrome();
+  await loadCurrent();
+}
+
+// ---------------------------------------------------------------- editing
+
+function snapshot() {
+  return state.boxes.map((b) => ({ ...b }));
+}
+
+function pushUndo() {
+  state.undoStack.push(snapshot());
+  if (state.undoStack.length > 100) state.undoStack.shift();
+}
+
+function undo() {
+  if (state.undoStack.length === 0) {
+    setStatus("nothing to undo");
+    return;
+  }
+  state.boxes = state.undoStack.pop();
+  state.selected = -1;
+  state.dirty = true;
+  scheduleSave();
+  renderChrome();
+  render();
+}
+
+function deleteBox(i) {
+  if (i < 0 || i >= state.boxes.length) return;
+  pushUndo();
+  state.boxes.splice(i, 1);
+  if (state.selected === i) state.selected = -1;
+  else if (state.selected > i) state.selected--;
+  state.dirty = true;
+  scheduleSave();
+  renderChrome();
+  render();
+}
+
+function deleteSelected() {
+  if (state.selected < 0) {
+    setStatus("no box selected");
+    return;
+  }
+  deleteBox(state.selected);
+}
+
+function assignClassByShortcut(key) {
+  if (!(key in state.shortcutMap)) {
+    setStatus(`no class bound to "${key}"`, "error");
+    return;
+  }
+  const cls = state.shortcutMap[key];
+  state.currentClass = cls;
+  const sel = state.selected >= 0 ? state.boxes[state.selected] : null;
+  if (sel && sel.cls !== cls) {
+    pushUndo();
+    sel.cls = cls;
+    state.dirty = true;
+    scheduleSave();
+    setStatus(`box set to "${state.classes[cls]}"`);
+  }
+  renderChrome();
+  render();
+}
+
+function setZoom(z) {
+  state.zoom = Math.min(24, Math.max(2, z));
+  state.zoomInit = true;
+  localStorage.setItem("annotate.zoom", String(state.zoom));
+  renderChrome();
+  render();
+}
+
+function cancelOp() {
+  if (!state.op) {
+    state.selected = -1;
+    renderChrome();
+    render();
+    return;
+  }
+  if (state.op.snapshot) state.boxes = state.op.snapshot;
+  state.op = null;
+  renderChrome();
+  render();
+}
+
+// ---------------------------------------------------------------- geometry
+
+function handlePoints(b) {
+  const x1 = b.x, y1 = b.y, x2 = b.x + b.w, y2 = b.y + b.h;
+  const xm = b.x + b.w / 2, ym = b.y + b.h / 2;
+  return [
+    { id: "nw", x: x1, y: y1 }, { id: "n", x: xm, y: y1 }, { id: "ne", x: x2, y: y1 },
+    { id: "e", x: x2, y: ym }, { id: "se", x: x2, y: y2 }, { id: "s", x: xm, y: y2 },
+    { id: "sw", x: x1, y: y2 }, { id: "w", x: x1, y: ym },
+  ];
+}
+
+function hitHandle(px, py) {
+  if (state.selected < 0) return null;
+  const r = 7 / state.zoom;
+  for (const h of handlePoints(state.boxes[state.selected])) {
+    if (Math.abs(px - h.x) <= r && Math.abs(py - h.y) <= r) return h.id;
+  }
+  return null;
+}
+
+function hitBox(px, py) {
+  const g = 4 / state.zoom;
+  for (let i = state.boxes.length - 1; i >= 0; i--) {
+    const b = state.boxes[i];
+    if (px >= b.x - g && px <= b.x + b.w + g && py >= b.y - g && py <= b.y + b.h + g) return i;
+  }
+  return -1;
+}
+
+function clamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+function pos(e) {
+  const r = $("cv").getBoundingClientRect();
+  return { x: (e.clientX - r.left) / state.zoom, y: (e.clientY - r.top) / state.zoom };
+}
+
+// ---------------------------------------------------------------- mouse
+
+function onMouseDown(e) {
+  if (e.button !== 0 || !state.img) return;
+  e.preventDefault();
+  const p = pos(e);
+  const iw = state.img.width, ih = state.img.height;
+  if (p.x < 0 || p.y < 0 || p.x > iw || p.y > ih) return;
+
+  const handle = hitHandle(p.x, p.y);
+  if (handle !== null) {
+    state.op = {
+      type: "resize", id: handle, idx: state.selected,
+      b0: { ...state.boxes[state.selected] }, start: p,
+      snapshot: snapshot(), moved: false,
+    };
+    return;
+  }
+  const idx = hitBox(p.x, p.y);
+  if (idx >= 0) {
+    if (state.selected !== idx) {
+      state.selected = idx;
+      renderChrome();
+      render();
+    }
+    state.op = {
+      type: "move", idx, b0: { ...state.boxes[idx] }, start: p,
+      snapshot: snapshot(), moved: false,
+    };
+    return;
+  }
+  state.selected = -1;
+  state.op = { type: "draw", start: p, cur: p };
+  renderChrome();
+  render();
+}
+
+function onMouseMove(e) {
+  const op = state.op;
+  if (!op || !state.img) return;
+  e.preventDefault();
+  const p = pos(e);
+  const iw = state.img.width, ih = state.img.height;
+  if (Math.abs(p.x - op.start.x) * state.zoom > 2 || Math.abs(p.y - op.start.y) * state.zoom > 2) {
+    op.moved = true;
+  }
+
+  if (op.type === "draw") {
+    op.cur = { x: clamp(p.x, 0, iw), y: clamp(p.y, 0, ih) };
+  } else if (op.type === "move") {
+    const b = state.boxes[op.idx];
+    b.x = clamp(op.b0.x + (p.x - op.start.x), 0, iw - b.w);
+    b.y = clamp(op.b0.y + (p.y - op.start.y), 0, ih - b.h);
+  } else if (op.type === "resize") {
+    const b = state.boxes[op.idx];
+    let x1 = op.b0.x, y1 = op.b0.y, x2 = op.b0.x + op.b0.w, y2 = op.b0.y + op.b0.h;
+    if (op.id.includes("w")) x1 = clamp(p.x, 0, x2 - 1);
+    if (op.id.includes("e")) x2 = clamp(p.x, x1 + 1, iw);
+    if (op.id.includes("n")) y1 = clamp(p.y, 0, y2 - 1);
+    if (op.id.includes("s")) y2 = clamp(p.y, y1 + 1, ih);
+    b.x = x1;
+    b.y = y1;
+    b.w = x2 - x1;
+    b.h = y2 - y1;
+  }
+  render();
+}
+
+function onMouseUp(e) {
+  const op = state.op;
+  state.op = null;
+  if (!op) return;
+
+  if (op.type === "draw") {
+    const a = op.start, b = op.cur || op.start;
+    const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+    const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
+    if (w * state.zoom >= 3 && h * state.zoom >= 3) {
+      pushUndo();
+      state.boxes.push({ cls: state.currentClass, x, y, w, h });
+      state.selected = state.boxes.length - 1;
+      state.dirty = true;
+      scheduleSave();
+      if (state.currentClass === null) {
+        setStatus("pick a class for this box: 0-9, . (dot), - (dash)", "error");
+      }
+    }
+  } else if (op.moved) {
+    state.undoStack.push(op.snapshot);
+    if (state.undoStack.length > 100) state.undoStack.shift();
+    state.dirty = true;
+    scheduleSave();
+  }
+  renderChrome();
+  render();
+}
+
+function onContext(e) {
+  e.preventDefault();
+  if (!state.img) return;
+  const p = pos(e);
+  const idx = hitBox(p.x, p.y);
+  if (idx >= 0) deleteBox(idx);
+}
+
+// ---------------------------------------------------------------- rendering
+
+function render() {
+  const cv = $("cv");
+  const ctx = cv.getContext("2d");
+  const img = state.img;
+  if (!img) {
+    cv.width = 0;
+    cv.height = 0;
+    return;
+  }
+  const z = state.zoom;
+  const W = img.width * z, H = img.height * z;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(W * dpr);
+  cv.height = Math.round(H * dpr);
+  cv.style.width = W + "px";
+  cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(img, 0, 0, W, H);
+
+  state.boxes.forEach((b, i) => {
+    const sel = i === state.selected;
+    const color = classColor(b.cls);
+    const x = b.x * z, y = b.y * z, w = b.w * z, h = b.h * z;
+    ctx.fillStyle = classColor(b.cls, sel ? 0.28 : 0.12);
+    ctx.fillRect(x, y, w, h);
+    ctx.lineWidth = sel ? 3 : 2;
+    ctx.strokeStyle = color;
+    ctx.strokeRect(x, y, w, h);
+
+    const name = b.cls === null ? "?" : state.classes[b.cls];
+    ctx.font = "12px system-ui, sans-serif";
+    const tw = ctx.measureText(name).width;
+    const ty = y >= 16 ? y - 15 : y + h;
+    ctx.fillStyle = "rgba(0,0,0,0.72)";
+    ctx.fillRect(x, ty, tw + 8, 15);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(name, x + 4, ty + 11.5);
+
+    if (sel) {
+      ctx.fillStyle = color;
+      for (const hp of handlePoints(b)) {
+        ctx.fillRect(hp.x * z - 3.5, hp.y * z - 3.5, 7, 7);
+      }
+    }
+  });
+}
+
+function setStatus(msg, kind = "") {
+  const el = $("status");
+  el.textContent = msg;
+  el.className = kind;
+}
+
+function buildPalette() {
+  const pal = $("palette");
+  pal.innerHTML = "";
+  state.classes.forEach((name, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.style.setProperty("--chip", classColor(i));
+    chip.innerHTML =
+      `<span class="sw" style="background:${classColor(i)}"></span>${name}` +
+      (shortcutFor(name) ? ` <kbd>${shortcutFor(name)}</kbd>` : "");
+    chip.onclick = () => {
+      state.currentClass = i;
+      if (state.selected >= 0 && state.boxes[state.selected].cls !== i) {
+        pushUndo();
+        state.boxes[state.selected].cls = i;
+        state.dirty = true;
+        scheduleSave();
+      }
+      renderChrome();
+      render();
+    };
+    pal.appendChild(chip);
+  });
+}
+
+function renderBoxList() {
+  const ul = $("boxlist");
+  ul.innerHTML = "";
+  state.boxes.forEach((b, i) => {
+    const li = document.createElement("li");
+    if (i === state.selected) li.className = "sel";
+    const name = b.cls === null ? "?" : state.classes[b.cls];
+    li.innerHTML =
+      `<span class="swatch" style="background:${classColor(b.cls)}"></span>` +
+      `<span>${name}</span>` +
+      `<small>${Math.round(b.x)},${Math.round(b.y)} · ${Math.round(b.w)}×${Math.round(b.h)}</small>`;
+    const del = document.createElement("button");
+    del.textContent = "×";
+    del.title = "delete box";
+    del.onclick = (ev) => {
+      ev.stopPropagation();
+      deleteBox(i);
+    };
+    li.appendChild(del);
+    li.onclick = () => {
+      state.selected = i;
+      renderChrome();
+      render();
+    };
+    ul.appendChild(li);
+  });
+  $("empty-note").textContent = state.boxes.length
+    ? ""
+    : "no boxes yet — drag on the image to draw one";
+}
+
+function renderChrome() {
+  const e = entry();
+  const entries = view();
+  $("filename").textContent = e ? e.path : "—";
+  $("progress").textContent =
+    `${entries.length ? state.index + 1 : 0} / ${entries.length}` +
+    ` · done ${state.images.filter((x) => x.done).length} / ${state.images.length}`;
+  $("dirty-flag").textContent = state.dirty || state.saveTimer ? "● unsaved" : "";
+  $("btn-prev").disabled = !e || state.index <= 0;
+  $("btn-next").disabled = !e || state.index >= entries.length - 1;
+  $("btn-del").disabled = state.selected < 0;
+  $("btn-empty").disabled = !e;
+  $("btn-filter").classList.toggle("on", state.skipDone);
+  $("zoom-label").textContent =
+    state.img ? `${state.zoom}× · ${state.img.width}×${state.img.height} px` : "";
+  document.querySelectorAll("#palette .chip").forEach((chip, i) => {
+    chip.classList.toggle("on", i === state.currentClass);
+  });
+  renderBoxList();
+}
+
+// ---------------------------------------------------------------- keys
+
+window.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === "s") {
+      e.preventDefault();
+      save();
+    } else if (e.key === "z") {
+      e.preventDefault();
+      undo();
+    }
+    return;
+  }
+
+  if ((e.key >= "0" && e.key <= "9") || e.key === "." || e.key === "-") {
+    e.preventDefault();
+    assignClassByShortcut(e.key);
+    return;
+  }
+
+  switch (e.key) {
+    case "ArrowRight":
+    case "d":
+      e.preventDefault();
+      navigate(1);
+      break;
+    case "ArrowLeft":
+    case "a":
+      e.preventDefault();
+      navigate(-1);
+      break;
+    case "Enter":
+      e.preventDefault();
+      save().then((ok) => ok && navigate(1));
+      break;
+    case "Backspace":
+    case "Delete":
+      e.preventDefault();
+      deleteSelected();
+      break;
+    case "z":
+      undo();
+      break;
+    case "x":
+      markEmpty();
+      break;
+    case "f":
+      toggleFilter();
+      break;
+    case "[":
+      setZoom(state.zoom - 1);
+      break;
+    case "]":
+      setZoom(state.zoom + 1);
+      break;
+    case "Escape":
+      cancelOp();
+      break;
+  }
+});
+
+// ---------------------------------------------------------------- wiring
+
+const cv = $("cv");
+cv.addEventListener("mousedown", onMouseDown);
+window.addEventListener("mousemove", onMouseMove);
+window.addEventListener("mouseup", onMouseUp);
+cv.addEventListener("contextmenu", onContext);
+
+$("btn-prev").onclick = () => navigate(-1);
+$("btn-next").onclick = () => navigate(1);
+$("btn-save-next").onclick = () => save().then((ok) => ok && navigate(1));
+$("btn-empty").onclick = markEmpty;
+$("btn-undo").onclick = undo;
+$("btn-del").onclick = deleteSelected;
+$("btn-filter").onclick = toggleFilter;
+$("btn-zoom-in").onclick = () => setZoom(state.zoom + 1);
+$("btn-zoom-out").onclick = () => setZoom(state.zoom - 1);
+
+window.addEventListener("beforeunload", (e) => {
+  if (state.dirty || state.saveTimer) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
+
+loadList().catch((err) => setStatus("startup failed: " + err.message, "error"));
+</script>
+</body>
+</html>

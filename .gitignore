@@ -1,0 +1,7 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+datasets
+**/__pycache__
+**/__marimo__
+models
