@@ -231,10 +231,16 @@ function shortcutFor(name) {
 
 // ---------------------------------------------------------------- data io
 
-/** fetch() as JSON, throwing the server's error message on non-OK responses. */
+/** fetch() as JSON; throws the server's error message on non-OK responses. */
 async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
-  const body = await res.json().catch(() => ({}));
+  // Error responses may be plain text or empty, so a failed parse there only
+  // costs us the nicer message and is swallowed; on OK responses a parse
+  // failure is a real bug and must surface.
+  const body = await res.json().catch((err) => {
+    if (res.ok) throw err;
+    return {};
+  });
   if (!res.ok) throw new Error(body.error || res.statusText);
   return body;
 }

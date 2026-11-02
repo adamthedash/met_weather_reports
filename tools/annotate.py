@@ -15,7 +15,8 @@ YOLO label files under ``datasets/digits/labels`` mirroring the images tree
 ``<class> <cx> <cy> <w> <h>`` normalised to 0-1). An empty label file marks
 a crop as "done but nothing to label" (ignored/background).
 
-Standard library only: no dependencies beyond the Python in the pixi env.
+Standard library for the server and file I/O; PyYAML (declared in pixi.toml)
+is the only third-party dependency and is used to parse data.yaml.
 """
 
 from __future__ import annotations
@@ -32,9 +33,10 @@ from pathlib import Path
 from typing import TypedDict
 from urllib.parse import parse_qs, urlparse
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
-FALLBACK_CLASSES = [str(d) for d in range(10)] + ["dash", "dot"]
 MAX_BOXES = 64
 MAX_BODY = 1_000_000
 
@@ -76,34 +78,42 @@ CFG: Config  # populated in main()
 
 
 def load_classes(yaml_path: Path) -> list[str]:
-    """Parse the ``names:`` mapping of a YOLO data.yaml (int key -> label).
+    """Read class names from the int-keyed ``names:`` mapping of a YOLO data.yaml.
 
-    Falls back to ``FALLBACK_CLASSES`` when the file is missing or has no
-    parsable ``names:`` mapping.
+    ``data.yaml`` is the single source of truth for classes; nothing falls
+    back to defaults.
+
+    Raises:
+        ValueError: If the file is missing, is not valid YAML, or has no
+            usable ``names:`` mapping (non-mapping or empty, non-integer or
+            duplicate keys, non-string names).
     """
     if not yaml_path.is_file():
-        return list(FALLBACK_CLASSES)
+        raise ValueError(f"data.yaml not found: {yaml_path}")
+    try:
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{yaml_path}: invalid YAML: {exc}") from exc
+    raw = data.get("names") if isinstance(data, dict) else None
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"{yaml_path}: expected a non-empty 'names:' mapping")
     names: dict[int, str] = {}
-    in_names = False
-    for raw in yaml_path.read_text(encoding="utf-8").splitlines():
-        line = raw.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        if not line[0].isspace():
-            in_names = line.strip() == "names:"
-            continue
-        if not in_names:
-            continue
-        key, sep, value = line.strip().partition(":")
-        if not sep:
-            continue
+    for key, value in raw.items():
+        if isinstance(key, bool) or not isinstance(key, (int, str)):
+            raise ValueError(f"{yaml_path}: names key {key!r} is not an integer")
         try:
-            idx = int(key.strip())
-        except ValueError:
-            continue
-        names[idx] = value.strip().strip("\"'")
-    if not names:
-        return list(FALLBACK_CLASSES)
+            idx = int(key)
+        except ValueError as exc:
+            raise ValueError(
+                f"{yaml_path}: names key {key!r} is not an integer"
+            ) from exc
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise ValueError(
+                f"{yaml_path}: names[{key!r}] must be a string, got {type(value).__name__}"
+            )
+        if idx in names:
+            raise ValueError(f"{yaml_path}: duplicate names index {idx}")
+        names[idx] = str(value)
     return [names[i] for i in sorted(names)]
 
 
@@ -199,7 +209,9 @@ def validate_boxes(raw: object) -> list[Box]:
         except (KeyError, TypeError, ValueError) as exc:
             raise ApiError(400, f"box {i}: expected cls, cx, cy, w, h") from exc
         if not 0 <= cls < len(CFG.classes):
-            raise ApiError(400, f"box {i}: class {cls} out of range 0..{len(CFG.classes) - 1}")
+            raise ApiError(
+                400, f"box {i}: class {cls} out of range 0..{len(CFG.classes) - 1}"
+            )
         if not all(math.isfinite(v) for v in (cx, cy, w, h)):
             raise ApiError(400, f"box {i}: non-finite coordinates")
         if w <= 0 or h <= 0:
@@ -212,7 +224,13 @@ def validate_boxes(raw: object) -> list[Box]:
         if x2 - x1 <= 0 or y2 - y1 <= 0:
             raise ApiError(400, f"box {i}: lies outside the image")
         boxes.append(
-            {"cls": cls, "cx": (x1 + x2) / 2, "cy": (y1 + y2) / 2, "w": x2 - x1, "h": y2 - y1}
+            {
+                "cls": cls,
+                "cx": (x1 + x2) / 2,
+                "cy": (y1 + y2) / 2,
+                "w": x2 - x1,
+                "h": y2 - y1,
+            }
         )
     return boxes
 
@@ -226,7 +244,8 @@ def write_labels(rel: str, boxes: list[Box]) -> Path:
     path = label_path_for(rel)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        f"{b['cls']} {b['cx']:.6f} {b['cy']:.6f} {b['w']:.6f} {b['h']:.6f}" for b in boxes
+        f"{b['cls']} {b['cx']:.6f} {b['cy']:.6f} {b['w']:.6f} {b['h']:.6f}"
+        for b in boxes
     ]
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     return path
@@ -276,7 +295,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json(400, {"error": str(exc)})
         except BrokenPipeError:
-            pass
+            # the client hung up mid-response: there is nobody to report to and
+            # the request is already in the access log, so log and move on
+            print(f"[{self.address_string()}] client disconnected mid-response")
         except Exception as exc:  # noqa: BLE001 - last-resort error reporting
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
@@ -317,6 +338,8 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_BODY:
             raise ApiError(413, "payload too large")
+        # an empty body is treated as {}; the missing 'path' check below then
+        # turns it into a clear 400 rather than a JSON syntax error
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError as exc:
@@ -340,7 +363,11 @@ class Handler(BaseHTTPRequestHandler):
             exists = lp.is_file()
             done += int(exists)
             images.append(
-                {"path": rel, "done": exists, "has_labels": exists and lp.stat().st_size > 0}
+                {
+                    "path": rel,
+                    "done": exists,
+                    "has_labels": exists and lp.stat().st_size > 0,
+                }
             )
         self._json(200, {"images": images, "total": len(images), "done": done})
 
@@ -386,7 +413,7 @@ def main() -> None:
         "--data-yaml",
         type=Path,
         default=REPO_ROOT / "datasets" / "digits" / "data.yaml",
-        help="YOLO data.yaml used for class names",
+        help="YOLO data.yaml defining the class names (must exist and parse)",
     )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8123)
@@ -396,11 +423,15 @@ def main() -> None:
     labels_root = args.labels.resolve()
     if not images_root.is_dir():
         raise SystemExit(f"images root not found: {images_root}")
+    try:
+        classes = load_classes(args.data_yaml)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     CFG = Config(
         images_root=images_root,
         labels_root=labels_root,
-        classes=load_classes(args.data_yaml),
+        classes=classes,
     )
     rels = list_images(images_root)
     done = sum(1 for rel in rels if label_path_for(rel).is_file())

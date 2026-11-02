@@ -1,7 +1,8 @@
 # annotate — bounding-box labeler for the handwritten digits dataset
 
-A small, dependency-free tool for drawing character-level bounding boxes on the
-table-cell crops in `datasets/digits/images`. Boxes are saved as YOLO label
+A small tool for drawing character-level bounding boxes on the
+table-cell crops in `datasets/digits/images`, with PyYAML as its only
+third-party dependency. Boxes are saved as YOLO label
 files under `datasets/digits/labels`, ready for `ultralytics` training against
 `datasets/digits/data.yaml`.
 
@@ -9,7 +10,7 @@ Built from two files:
 
 | File | Role |
 |---|---|
-| `tools/annotate.py` | stdlib-only HTTP server: image listing, label file I/O, JSON API |
+| `tools/annotate.py` | HTTP server (stdlib + PyYAML): image listing, label file I/O, JSON API |
 | `tools/annotate.html` | single-page UI: vanilla JS + `<canvas>`, no build step |
 
 ## Quick start
@@ -29,7 +30,7 @@ CLI flags (all optional):
 |---|---|---|
 | `--images` | `datasets/digits/images` | root directory of crop images |
 | `--labels` | `datasets/digits/labels` | output root for YOLO label files |
-| `--data-yaml` | `datasets/digits/data.yaml` | source of class names |
+| `--data-yaml` | `datasets/digits/data.yaml` | class names (file must exist and parse) |
 | `--host` | `127.0.0.1` | bind address |
 | `--port` | `8123` | port |
 
@@ -70,13 +71,15 @@ same subpath.
 
 ## Server architecture (`annotate.py`)
 
-Standard library only (`http.server`, `json`, `pathlib`, …). Structured in
+Standard library (`http.server`, `json`, `pathlib`, …) plus PyYAML for
+`data.yaml`. Structured in
 three layers:
 
 1. **Dataset helpers** — pure functions, no HTTP concerns:
-   - `load_classes()` parses the `names:` mapping of `data.yaml` with a small
-     hand-rolled parser (no YAML dependency). Falls back to
-     `0-9, dash, dot` if the file is missing or unreadable.
+   - `load_classes()` parses the int-keyed `names:` mapping of `data.yaml`
+     with PyYAML. Strict by design: the dataset fully defines the classes, so
+     a missing file, invalid YAML, or a missing/empty `names:` mapping aborts
+     startup with a clear error instead of falling back to defaults.
    - `natural_key()` / `list_images()` — natural sort so `10_2.png` precedes
      `10_10.png`; recursive scan of `.png .jpg .jpeg .bmp .webp`.
    - `safe_path()` — rejects absolute paths, `..` segments, and backslashes,
