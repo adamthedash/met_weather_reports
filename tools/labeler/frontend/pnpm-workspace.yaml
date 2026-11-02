@@ -1,0 +1,5 @@
+# pnpm ≥ 11 keeps build-policy settings here (not in package.json).
+# esbuild's install script is required by vite (it places/links the native
+# binary); everything else stays unreviewed and is blocked by strictDepBuilds.
+allowBuilds:
+  esbuild: true
