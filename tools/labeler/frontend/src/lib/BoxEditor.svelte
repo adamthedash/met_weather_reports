@@ -34,8 +34,8 @@
     onstatus = () => {},
   }: {
     image: HTMLImageElement | null;
-    boxes?: Box[];
-    selected?: number;
+    boxes: Box[];
+    selected: number;
     zoom: number;
     classes: string[];
     currentClass?: number | null;

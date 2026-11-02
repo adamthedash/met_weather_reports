@@ -24,6 +24,7 @@
   let skipped = $state(0); // stale prediction files the queue ignores
   let img = $state<HTMLImageElement | null>(null);
   let boxes = $state<Box[]>([]);
+  let selected = $state(-1); // read-only view: never leaves -1
   let loadSeq = 0;
   let loading = $state(false); // a display load is in flight
   let busy = $state(false); // a decision request is in flight
@@ -276,7 +277,7 @@
 
   <main>
     <div class="canvas-wrap" bind:this={wrapEl}>
-      <BoxEditor image={img} {zoom} {classes} {badge} readonly />
+      <BoxEditor image={img} bind:boxes bind:selected {zoom} {classes} {badge} readonly />
     </div>
     <aside>
       <h3>prediction</h3>
