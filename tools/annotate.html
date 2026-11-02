@@ -192,7 +192,8 @@ const state = {
   shortcutMap: {},
   images: [],
   skipDone: localStorage.getItem("annotate.skipDone") === "1",
-  index: 0,
+  currentPath: null,    // path of the crop on display (source of truth)
+  loadSeq: 0,           // bumped per load; stale responses are dropped
   boxes: [],            // {cls, x, y, w, h} in image pixels
   selected: -1,
   currentClass: null,
@@ -239,12 +240,12 @@ function loadImage(url) {
   });
 }
 
-function view() {
-  return state.skipDone ? state.images.filter((e) => !e.done) : state.images;
+function visible(e) {
+  return !state.skipDone || !e.done;
 }
 
 function entry() {
-  return view()[state.index] || null;
+  return state.images.find((e) => e.path === state.currentPath) || null;
 }
 
 async function loadList() {
@@ -261,14 +262,15 @@ async function loadList() {
   state.images = listing.images;
   buildPalette();
   const last = localStorage.getItem("annotate.lastPath");
-  const entries = view();
-  const idx = entries.findIndex((e) => e.path === last);
-  state.index = idx >= 0 ? idx : 0;
+  const restored =
+    state.images.find((e) => e.path === last) || state.images.find(visible) || null;
+  state.currentPath = restored ? restored.path : null;
   await loadCurrent();
 }
 
 async function loadCurrent() {
   const e = entry();
+  const seq = ++state.loadSeq;
   state.boxes = [];
   state.selected = -1;
   state.undoStack = [];
@@ -290,6 +292,7 @@ async function loadCurrent() {
       fetchJSON("/api/labels?path=" + encodeURIComponent(e.path)),
       loadImage("/api/image?path=" + encodeURIComponent(e.path)),
     ]);
+    if (seq !== state.loadSeq) return; // superseded by a newer load
     state.img = img;
     state.boxes = labels.boxes.map((b) => ({
       cls: b.cls,
@@ -304,6 +307,7 @@ async function loadCurrent() {
     }
     setStatus("");
   } catch (err) {
+    if (seq !== state.loadSeq) return; // superseded by a newer load
     state.img = null;
     setStatus("load failed: " + err.message, "error");
   }
@@ -361,13 +365,24 @@ function scheduleSave() {
 
 async function navigate(delta) {
   if (!(await flushSave())) return;
-  const entries = view();
-  const next = state.index + delta;
-  if (next < 0 || next >= entries.length) {
-    setStatus(delta > 0 ? "last crop" : "first crop");
+  const all = state.images;
+  const cur = entry();
+  // Step from the current crop's place in the full listing, skipping crops the
+  // "hide done" filter hides. Anchoring on the full list (not a filtered view)
+  // means a just-saved crop is still findable, so the very next undone crop is
+  // opened — never skipped — and a save can never detach the displayed
+  // image/annotations from its file.
+  let j = cur ? all.indexOf(cur) + delta : delta > 0 ? 0 : all.length - 1;
+  while (j >= 0 && j < all.length && !visible(all[j])) j += delta;
+  if (j < 0 || j >= all.length) {
+    setStatus(
+      cur
+        ? delta > 0 ? "last crop" : "first crop"
+        : "nothing left in this view — press f to show done crops",
+    );
     return;
   }
-  state.index = next;
+  state.currentPath = all[j].path;
   await loadCurrent();
 }
 
@@ -388,14 +403,18 @@ async function markEmpty() {
 
 async function toggleFilter() {
   if (!(await flushSave())) return;
-  const cur = entry() ? entry().path : null;
   state.skipDone = !state.skipDone;
   localStorage.setItem("annotate.skipDone", state.skipDone ? "1" : "0");
-  const entries = view();
-  const idx = cur ? entries.findIndex((e) => e.path === cur) : -1;
-  state.index = idx >= 0 ? idx : 0;
+  const cur = entry();
+  if (!cur) {
+    // nothing on display (empty view) — jump to the first visible crop
+    const first = state.images.find(visible) || null;
+    state.currentPath = first ? first.path : null;
+    await loadCurrent();
+    return;
+  }
+  // the crop on display stays put; the filter only restricts prev/next
   renderChrome();
-  await loadCurrent();
 }
 
 // ---------------------------------------------------------------- editing
@@ -741,14 +760,15 @@ function renderBoxList() {
 
 function renderChrome() {
   const e = entry();
-  const entries = view();
+  const all = state.images;
+  const i = e ? all.indexOf(e) : -1;
   $("filename").textContent = e ? e.path : "—";
   $("progress").textContent =
-    `${entries.length ? state.index + 1 : 0} / ${entries.length}` +
-    ` · done ${state.images.filter((x) => x.done).length} / ${state.images.length}`;
+    `${i >= 0 ? i + 1 : 0} / ${all.length}` +
+    ` · done ${all.filter((x) => x.done).length} / ${all.length}`;
   $("dirty-flag").textContent = state.dirty || state.saveTimer ? "● unsaved" : "";
-  $("btn-prev").disabled = !e || state.index <= 0;
-  $("btn-next").disabled = !e || state.index >= entries.length - 1;
+  $("btn-prev").disabled = i < 0 || !all.slice(0, i).some(visible);
+  $("btn-next").disabled = i < 0 || !all.slice(i + 1).some(visible);
   $("btn-del").disabled = state.selected < 0;
   $("btn-empty").disabled = !e;
   $("btn-filter").classList.toggle("on", state.skipDone);

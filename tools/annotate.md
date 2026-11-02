@@ -58,8 +58,8 @@ Example — a cell containing `.14`:
 
 Semantics used by the tool and by `train.txt`/`val.txt`:
 
-- **label file exists (any content)** → crop is *done* (skipped by the
-  "hide done" filter)
+- **label file exists (any content)** → crop is *done* (not offered by
+  prev/next while the "hide done" filter is on)
 - **empty label file** → crop is done but contains nothing to label
   (ignored/background). The UI's *mark empty* action (`x`) writes one.
 - **non-empty** → crop has labeled characters
@@ -137,8 +137,10 @@ kept in **image pixels** everywhere and normalized only at save time.
   resize, delete, reclass).
 - **Resume** — `localStorage` remembers the last crop, zoom level, and the
   "hide done" filter; existing label files are loaded and drawn on open.
-- **Progress** — header shows `crop N / M · done X / Y`, and the *hide done*
-  filter (`f`) restricts prev/next to unlabeled crops for fast batch runs.
+- **Progress** — header shows `crop N / M · done X / Y` (N/M counts every
+  crop), and the *hide done* filter (`f`) restricts prev/next to unlabeled
+  crops for fast batch runs; toggling the filter keeps the current crop on
+  screen.
 
 ### Keyboard reference
 
@@ -161,6 +163,10 @@ kept in **image pixels** everywhere and normalized only at save time.
 
 ## Design notes & limitations
 
+- **Selection is path-anchored** — the crop on display is tracked by its path,
+  never by position in the (filtered) list, so saving or toggling the filter
+  can never detach the displayed image/annotations from its file. The filter
+  is purely a navigation predicate over prev/next.
 - **Axis-aligned boxes only** — YOLO format has no rotation; the crop grid is
   close to axis-aligned anyway.
 - **Single selection** — shift-multi-select is intentionally omitted; cells
