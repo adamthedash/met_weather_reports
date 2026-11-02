@@ -38,6 +38,7 @@ def _(model):
             "mixup": 0.0,
             "copy_paste": 0.0,
             "erasing": 0.0,
+            "augmentations": []
         }
 
     # https://docs.ultralytics.com/usage/cfg#train-settings
@@ -45,6 +46,7 @@ def _(model):
         data="datasets/digits/data.yaml",
         epochs=100,
         patience=5,
+        imgsz=640, # Bigger size better for whatever reason
         cache=True,
         **disable_all_augmentation(),
     )
