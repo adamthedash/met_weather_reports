@@ -40,14 +40,14 @@ def _(model):
             "erasing": 0.0,
         }
 
-
+    # https://docs.ultralytics.com/usage/cfg#train-settings
     results = model.train(
         data="datasets/digits/data.yaml",
-        epochs=10,
-        nms=False,
+        epochs=100,
+        patience=5,
+        cache=True,
         **disable_all_augmentation(),
     )
-    results
     return
 
 
