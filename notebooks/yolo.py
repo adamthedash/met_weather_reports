@@ -7,6 +7,7 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     from ultralytics import YOLO
+    from ultralytics.models.yolo.detect import DetectionTrainer
 
     return (YOLO,)
 
@@ -20,14 +21,33 @@ def _(YOLO):
 
 @app.cell
 def _(model):
-    res = model.predict("patches/8_5.png", nms=False)
-    res[0]
-    return (res,)
+    def disable_all_augmentation() -> dict:
+        """Return a dictionary of training kwargs that disable all image augmentation."""
+        return {
+            "hsv_h": 0.0,
+            "hsv_s": 0.0,
+            "hsv_v": 0.0,
+            "degrees": 0.0,
+            "translate": 0.0,
+            "scale": 0.0,
+            "shear": 0.0,
+            "perspective": 0.0,
+            "flipud": 0.0,
+            "fliplr": 0.0,
+            "mosaic": 0.0,
+            "mixup": 0.0,
+            "copy_paste": 0.0,
+            "erasing": 0.0,
+        }
 
 
-@app.cell
-def _(res):
-    res[0].boxes
+    results = model.train(
+        data="datasets/digits/data.yaml",
+        epochs=10,
+        nms=False,
+        **disable_all_augmentation(),
+    )
+    results
     return
 
 
