@@ -60,7 +60,7 @@ Example — a cell containing `.14`:
 Semantics used by the tool and by `train.txt`/`val.txt`:
 
 - **label file exists (any content)** → crop is *done* (not offered by
-  prev/next while the "hide done" filter is on)
+  prev/next in the *show non-annotated* view)
 - **empty label file** → crop is done but contains nothing to label
   (ignored/background). The UI's *mark empty* action (`x`) writes one, and the
   UI overlays an `EMPTY` badge on such crops (hidden again while any box is
@@ -150,11 +150,13 @@ kept in **image pixels** everywhere and normalized only at save time.
   Undo keeps a 100-deep stack of pre-mutation snapshots (covers draw, move,
   resize, delete, reclass).
 - **Resume** — `localStorage` remembers the last crop, zoom level, and the
-  "hide done" filter; existing label files are loaded and drawn on open.
+  view mode; existing label files are loaded and drawn on open.
 - **Progress** — header shows `crop N / M · done X / Y` (N/M counts every
-  crop), and the *hide done* filter (`f`) restricts prev/next to unlabeled
-  crops for fast batch runs; toggling the filter keeps the current crop on
-  screen.
+  crop). The *view mode* (`f`, shown on the toolbar button) restricts prev/next
+  to crops matching the mode — *all*, *annotated* (label file exists, including
+  crops marked empty), or *non-annotated* (no label file yet) — supporting both
+  fast batch runs and review passes over already-labeled crops; switching modes
+  keeps the current crop on screen.
 
 ### Keyboard reference
 
@@ -172,16 +174,16 @@ kept in **image pixels** everywhere and normalized only at save time.
 | `z` | undo |
 | `⌫` / `Del` | delete selected box |
 | `Esc` | cancel drag / deselect |
-| `f` | toggle "hide done" |
+| `f` | cycle view mode: all → annotated → non-annotated |
 | `[` / `]` | zoom out / in |
 | `Ctrl+S` | save now |
 
 ## Design notes & limitations
 
 - **Selection is path-anchored** — the crop on display is tracked by its path,
-  never by position in the (filtered) list, so saving or toggling the filter
-  can never detach the displayed image/annotations from its file. The filter
-  is purely a navigation predicate over prev/next.
+  never by position in the (filtered) list, so saving or switching the view
+  mode can never detach the displayed image/annotations from its file. The
+  view mode is purely a navigation predicate over prev/next.
 - **Axis-aligned boxes only** — YOLO format has no rotation; the crop grid is
   close to axis-aligned anyway.
 - **Single selection** — `Shift`-click selects exactly one box;

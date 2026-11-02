@@ -148,7 +148,7 @@
     <button id="btn-empty">mark empty <kbd>x</kbd></button>
     <button id="btn-undo">undo <kbd>z</kbd></button>
     <button id="btn-del">delete box <kbd>⌫</kbd></button>
-    <button id="btn-filter">hide done <kbd>f</kbd></button>
+    <button id="btn-filter">view: all <kbd>f</kbd></button>
     <button id="btn-zoom-out">− <kbd>[</kbd></button>
     <span id="zoom-label" style="color:var(--dim)"></span>
     <button id="btn-zoom-in">+ <kbd>]</kbd></button>
@@ -190,6 +190,20 @@
 const $ = (id) => document.getElementById(id);
 
 /**
+ * Initial view mode from localStorage: "annotate.filterMode", falling back to
+ * the legacy "annotate.skipDone" toggle ("1" → non-annotated, else all).
+ * Unknown values degrade to "all".
+ */
+function loadFilterMode() {
+  const raw = localStorage.getItem("annotate.filterMode");
+  if (raw === "all" || raw === "annotated" || raw === "non-annotated") return raw;
+  return localStorage.getItem("annotate.skipDone") === "1" ? "non-annotated" : "all";
+}
+
+/** Next view mode in the cycle all → annotated → non-annotated → all. */
+const FILTER_CYCLE = { all: "annotated", annotated: "non-annotated", "non-annotated": "all" };
+
+/**
  * Global editor state shared by the UI functions below. Box coordinates are
  * image pixels; the server exchanges normalised 0-1 coordinates.
  */
@@ -197,7 +211,7 @@ const state = {
   classes: [],
   shortcutMap: {},
   images: [],
-  skipDone: localStorage.getItem("annotate.skipDone") === "1",
+  filterMode: loadFilterMode(),  // "all" | "annotated" | "non-annotated"
   currentPath: null,    // path of the crop on display (source of truth)
   loadSeq: 0,           // bumped per load; stale responses are dropped
   boxes: [],            // {cls, x, y, w, h} in image pixels
@@ -255,9 +269,11 @@ function loadImage(url) {
   });
 }
 
-/** Whether listing entry `e` passes the "hide done" filter. */
+/** Whether listing entry `e` passes the current view mode filter. */
 function visible(e) {
-  return !state.skipDone || !e.done;
+  if (state.filterMode === "annotated") return e.done;
+  if (state.filterMode === "non-annotated") return !e.done;
+  return true;
 }
 
 /** The listing entry for the crop on display, or null when none is shown. */
@@ -305,7 +321,7 @@ async function loadCurrent() {
     render();
     setStatus(
       state.images.length
-        ? "nothing left in this view — press f to show done crops"
+        ? "nothing left in this view — press f to change the view mode"
         : "no images found",
     );
     return;
@@ -389,7 +405,7 @@ async function navigate(delta) {
   const all = state.images;
   const cur = entry();
   // Step from the current crop's place in the full listing, skipping crops the
-  // "hide done" filter hides. Anchoring on the full list (not a filtered view)
+  // current view mode hides. Anchoring on the full list (not a filtered view)
   // means a just-saved crop is still findable, so the very next undone crop is
   // opened — never skipped — and a save can never detach the displayed
   // image/annotations from its file.
@@ -399,7 +415,7 @@ async function navigate(delta) {
     setStatus(
       cur
         ? delta > 0 ? "last crop" : "first crop"
-        : "nothing left in this view — press f to show done crops",
+        : "nothing left in this view — press f to change the view mode",
     );
     return;
   }
@@ -423,11 +439,14 @@ async function markEmpty() {
   if (await save()) await navigate(1);
 }
 
-/** Toggle the "hide done" filter (persisted); the displayed crop stays put. */
-async function toggleFilter() {
+/**
+ * Cycle the view mode all → annotated → non-annotated (persisted); the
+ * displayed crop stays put, the mode only restricts prev/next.
+ */
+async function cycleFilter() {
   if (!(await flushSave())) return;
-  state.skipDone = !state.skipDone;
-  localStorage.setItem("annotate.skipDone", state.skipDone ? "1" : "0");
+  state.filterMode = FILTER_CYCLE[state.filterMode];
+  localStorage.setItem("annotate.filterMode", state.filterMode);
   const cur = entry();
   if (!cur) {
     // nothing on display (empty view) — jump to the first visible crop
@@ -850,7 +869,8 @@ function renderChrome() {
   $("btn-next").disabled = i < 0 || !all.slice(i + 1).some(visible);
   $("btn-del").disabled = state.selected < 0;
   $("btn-empty").disabled = !e;
-  $("btn-filter").classList.toggle("on", state.skipDone);
+  $("btn-filter").innerHTML = `view: ${state.filterMode} <kbd>f</kbd>`;
+  $("btn-filter").classList.toggle("on", state.filterMode !== "all");
   $("zoom-label").textContent =
     state.img ? `${state.zoom}× · ${state.img.width}×${state.img.height} px` : "";
   document.querySelectorAll("#palette .chip").forEach((chip, i) => {
@@ -910,7 +930,7 @@ window.addEventListener("keydown", (e) => {
       markEmpty();
       break;
     case "f":
-      toggleFilter();
+      cycleFilter();
       break;
     case "[":
       setZoom(state.zoom - 1);
@@ -938,7 +958,7 @@ $("btn-save-next").onclick = () => save().then((ok) => ok && navigate(1));
 $("btn-empty").onclick = markEmpty;
 $("btn-undo").onclick = undo;
 $("btn-del").onclick = deleteSelected;
-$("btn-filter").onclick = toggleFilter;
+$("btn-filter").onclick = cycleFilter;
 $("btn-zoom-in").onclick = () => setZoom(state.zoom + 1);
 $("btn-zoom-out").onclick = () => setZoom(state.zoom - 1);
 
