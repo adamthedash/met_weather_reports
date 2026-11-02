@@ -27,22 +27,24 @@
     selected = $bindable(-1),
     zoom,
     classes,
-    currentClass,
+    currentClass = null,
     readonly = false,
-    empty = false,
-    onedit,
-    onstatus,
+    badge = "",
+    onedit = () => {},
+    onstatus = () => {},
   }: {
     image: HTMLImageElement | null;
-    boxes: Box[];
-    selected: number;
+    boxes?: Box[];
+    selected?: number;
     zoom: number;
     classes: string[];
-    currentClass: number | null;
+    currentClass?: number | null;
     readonly?: boolean;
-    empty?: boolean;
-    onedit: (snapshot: Box[]) => void;
-    onstatus: (msg: string, kind?: "" | "ok" | "error") => void;
+    /** Fixed-size badge text drawn in the image's top-left corner (e.g.
+     *  "EMPTY", "PREDICTED EMPTY"); hidden when empty. */
+    badge?: string;
+    onedit?: (snapshot: Box[]) => void;
+    onstatus?: (msg: string, kind?: "" | "ok" | "error") => void;
   } = $props();
 
   let cv: HTMLCanvasElement;
@@ -231,13 +233,14 @@
       ctx.strokeRect(x, y, w, h);
 
       const name = classes[b.cls] ?? String(b.cls);
+      const tag = b.conf !== undefined ? `${name} ${b.conf.toFixed(2)}` : name;
       ctx.font = "12px system-ui, sans-serif";
-      const tw = ctx.measureText(name).width;
+      const tw = ctx.measureText(tag).width;
       const ty = y >= 16 ? y - 15 : y + h;
       ctx.fillStyle = "rgba(0,0,0,0.72)";
       ctx.fillRect(x, ty, tw + 8, 15);
       ctx.fillStyle = "#fff";
-      ctx.fillText(name, x + 4, ty + 11.5);
+      ctx.fillText(tag, x + 4, ty + 11.5);
 
       if (sel) {
         ctx.fillStyle = color;
@@ -247,15 +250,16 @@
       }
     });
 
-    // fixed-size "EMPTY" badge in the image's top-left corner for crops that
-    // are done but hold no boxes; drawn after the boxes so it stays on top
-    if (empty) {
+    // fixed-size badge in the image's top-left corner ("EMPTY" for crops that
+    // are done but hold no boxes, "PREDICTED EMPTY" for predicted background);
+    // drawn after the boxes so it stays on top
+    if (badge) {
       ctx.font = "12px system-ui, sans-serif";
-      const tw = ctx.measureText("EMPTY").width;
+      const tw = ctx.measureText(badge).width;
       ctx.fillStyle = "rgba(0,0,0,0.72)";
       ctx.fillRect(6, 6, tw + 8, 15);
       ctx.fillStyle = "#fff";
-      ctx.fillText("EMPTY", 10, 17.5);
+      ctx.fillText(badge, 10, 17.5);
     }
   }
 

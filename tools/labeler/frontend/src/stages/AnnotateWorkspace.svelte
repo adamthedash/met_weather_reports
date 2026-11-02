@@ -466,7 +466,7 @@
         {zoom}
         {classes}
         {currentClass}
-        empty={emptyMarked}
+        badge={emptyMarked ? "EMPTY" : ""}
         onedit={onEdit}
         onstatus={setStatus}
       />

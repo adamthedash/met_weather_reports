@@ -12,8 +12,8 @@ byte-compatible with the existing pipeline
 (`scripts/bootstrap_annotations.py`, `scripts/prepare_dataset.py`,
 ultralytics training). The old tools remain runnable during the transition.
 
-Status: the **annotate** stage is complete; the **review** stage (accept/reject
-over bootstrap predictions) lands next.
+Both stages are complete: **annotate** (manual bounding-box labeling) and
+**review** (accept/reject over bootstrap predictions).
 
 ## Layout
 
@@ -27,6 +27,7 @@ over bootstrap predictions) lands next.
 | `tools/labeler/web.py` | request helpers shared by the stage routers |
 | `tools/labeler/stages/base.py` | stage seam: `Stage` contract + `summaries` |
 | `tools/labeler/stages/annotate.py` | annotate stage: queue listing + label I/O |
+| `tools/labeler/stages/review.py` | review stage: prediction queue + accept/reject decisions |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
 | `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
 | `tools/labeler/frontend/src/stages/` | workspace components + `registry.ts` (stage id → workspace) |
@@ -45,9 +46,9 @@ just labeler        # pnpm install + vite build, then serve on http://127.0.0.1:
 ```
 
 Open the URL in a browser (forward the port first when working over SSH).
-`Ctrl+C` stops the server. CLI flags: `--images`, `--labels`, `--data-yaml`
-(dataset paths, defaults under `datasets/digits`), `--host`, `--port`
-(default 8125), `--dist` (built frontend directory).
+`Ctrl+C` stops the server. CLI flags: `--images`, `--labels`, `--predictions`,
+`--data-yaml` (dataset paths, defaults under `datasets/digits`), `--host`,
+`--port` (default 8125), `--dist` (built frontend directory).
 
 Development, in two terminals:
 
@@ -81,6 +82,14 @@ Annotate stage (mounted at `/api/annotate`):
 | `GET /api/annotate/labels?path=` | `{"path", "boxes": [{cls, cx, cy, w, h}]}` (normalised) |
 | `POST /api/annotate/labels` | `{"path", "boxes"}` → `{"ok", "saved", "has_labels"}`; empty `boxes` marks the crop empty |
 
+Review stage (mounted at `/api/review`):
+
+| Route | Returns |
+|---|---|
+| `GET /api/review/list` | `{"predictions": [{path, boxes, empty, error}], "total", "remaining"}` — the queue; `total - remaining` predictions are stale and ignored |
+| `GET /api/review/prediction?path=` | `{"path", "boxes": [{cls, cx, cy, w, h, conf}]}` (normalised) |
+| `POST /api/review/decision` | `{"path", "accept": true\|false}` → `{"ok", "accepted", "saved", "already_annotated", "remaining"}` |
+
 Dataset semantics are unchanged: label file exists ⇒ crop done, empty file ⇒
 done-but-background, malformed label files are reported (400) never skipped,
 saves are clamped to the image and written as 5-column YOLO at 6 decimals.
@@ -94,6 +103,20 @@ shift-click/drag selects and moves, handles resize, right-click deletes,
 view mode (all → annotated → non-annotated), `[ ]` zoom, `Ctrl+S` save.
 Autosave 600 ms after the last edit; last crop/zoom/view mode resume from
 `localStorage` (`labeler.annotate.*`).
+
+## Review workflow
+
+Same keymap as `tools/review.html`: `y` accept (prediction becomes a YOLO
+label file, confidence column dropped; empty predictions confirm the crop as
+background), `n` reject (prediction discarded, crop stays non-annotated for
+the annotate stage), `← →`/`a d` browse without deciding. The crop is fitted
+to the canvas area at integer magnification; predicted boxes show class and
+confidence. Malformed prediction files are flagged and can only be rejected
+or skipped, never accepted. Decisions are destructive and immediate (no
+undo): accept writes the label before deleting the prediction, existing
+labels are never overwritten (a crop annotated in the meantime gets its stale
+prediction dropped with `already_annotated` reported), and `predictions/`
+stays owned by `scripts/bootstrap_annotations.py` (regeneration and pruning).
 
 ## Adding a stage
 

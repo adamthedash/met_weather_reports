@@ -6,7 +6,9 @@
 import type { Component } from "svelte";
 
 import AnnotateWorkspace from "./AnnotateWorkspace.svelte";
+import ReviewWorkspace from "./ReviewWorkspace.svelte";
 
 export const workspaces: Record<string, Component> = {
   annotate: AnnotateWorkspace,
+  review: ReviewWorkspace,
 };

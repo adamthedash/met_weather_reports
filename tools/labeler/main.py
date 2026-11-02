@@ -12,6 +12,7 @@ from tools.labeler.config import (
     DEFAULT_DATA_YAML,
     DEFAULT_IMAGES_ROOT,
     DEFAULT_LABELS_ROOT,
+    DEFAULT_PREDICTIONS_ROOT,
     FRONTEND_DIST,
     Config,
 )
@@ -35,6 +36,12 @@ def main() -> None:
         help="output root for YOLO label files (mirrors the images tree)",
     )
     ap.add_argument(
+        "--predictions",
+        type=Path,
+        default=DEFAULT_PREDICTIONS_ROOT,
+        help="root of the prediction files to review (mirrors the images tree)",
+    )
+    ap.add_argument(
         "--data-yaml",
         type=Path,
         default=DEFAULT_DATA_YAML,
@@ -56,6 +63,7 @@ def main() -> None:
         dist=args.dist,
         images_root=args.images,
         labels_root=args.labels,
+        predictions_root=args.predictions,
         data_yaml=args.data_yaml,
     )
     # strict by design: a missing images root or bad data.yaml aborts startup
@@ -68,12 +76,17 @@ def main() -> None:
 
     rels = ds.list_images()
     done = sum(1 for rel in rels if ds.label_path_for(rel).is_file())
+    queue, stale = ds.queue_and_stale()
     dist_built = (cfg.dist / "index.html").is_file()
     print(f"labeler server: http://{cfg.host}:{cfg.port}")
     print(f"  images : {len(rels)} crops under {ds.images_root}")
     print(f"  labels : {ds.labels_root}")
     print(f"  classes: {', '.join(ds.classes)} ({len(ds.classes)})")
     print(f"  done   : {done} / {len(rels)}")
+    print(
+        f"  queue  : {len(queue)} predictions to review"
+        + (f" ({stale} stale)" if stale else "")
+    )
     print(f"  stages : {', '.join(s.id for s in app.state.stages)}")
     print(
         f"  dist   : {cfg.dist} "

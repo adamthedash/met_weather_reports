@@ -1,6 +1,8 @@
 /** Typed fetch helpers for the labeler JSON API. */
 
-import type { BoxN, Listing } from "./types";
+import type {
+  BoxN, DecisionResult, Listing, PredBoxN, ReviewList,
+} from "./types";
 
 /** Shape every API error response has (see tools/labeler/app.py). */
 export type ApiError = { error: string };
@@ -57,5 +59,21 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, boxes }),
+    }),
+
+  // -- review stage -----------------------------------------------------
+  /** The review queue: undecided predictions + the stale count. */
+  reviewList: () => fetchJSON<ReviewList>("/api/review/list"),
+  /** The prediction boxes (normalised, with confidence) for one crop. */
+  prediction: (path: string) =>
+    fetchJSON<{ path: string; boxes: PredBoxN[] }>(
+      `/api/review/prediction?path=${encodeURIComponent(path)}`,
+    ),
+  /** Apply an accept/reject decision for one prediction. */
+  decide: (path: string, accept: boolean) =>
+    fetchJSON<DecisionResult>("/api/review/decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, accept }),
     }),
 };
