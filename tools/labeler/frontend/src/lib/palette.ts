@@ -1,6 +1,6 @@
 /** Class palette: deterministic colours and keyboard shortcuts. */
 
-/** Deterministic colour for a class index (same hue rotation as annotate.html). */
+/** Deterministic colour for a class index. */
 export function classColor(cls: number, alpha = 1): string {
   const h = Math.round((cls * 137.508) % 360);
   return `hsla(${h}, 65%, 52%, ${alpha})`;

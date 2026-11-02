@@ -1,11 +1,11 @@
 <script lang="ts">
   /**
-   * Annotate workspace: the manual bounding-box workflow of tools/annotate.md.
+   * Annotate workspace: manual bounding-box labeling over the crop queue.
    *
-   * Ports the behaviour of tools/annotate.html: image-pixel editing with a
-   * sticky current class, 600 ms debounced autosave, 100-deep undo, view-mode
-   * filtering of prev/next (all → annotated → non-annotated), and localStorage
-   * resume. Boxes live here and are edited through the shared BoxEditor.
+   * Image-pixel editing with a sticky current class, 600 ms debounced
+   * autosave, 100-deep undo, view-mode filtering of prev/next
+   * (all → annotated → non-annotated), and localStorage resume. Boxes live
+   * here and are edited through the shared BoxEditor.
    */
   import { onMount } from "svelte";
 

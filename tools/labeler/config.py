@@ -31,7 +31,7 @@ class Config:
     def dataset(self) -> Dataset:
         """Load the dataset: resolve the roots and parse the class names.
 
-        Strict by design (as in tools/annotate.py): the dataset fully defines
+        Strict by design: the dataset fully defines
         the tool, so a missing images root or unusable data.yaml aborts
         startup instead of falling back to defaults.
 

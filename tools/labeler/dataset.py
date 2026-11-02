@@ -1,11 +1,10 @@
 """Dataset helpers: class names, image listing, and YOLO label file I/O.
 
-Ported from ``tools/annotate.py``, with its ``CFG`` global replaced by the
-explicit :class:`Dataset` value object so each workflow stage can declare its
-own roots. Behaviour is unchanged: strict parsing (malformed label files are
-reported, never skipped), ``validate_boxes`` clamping, and a byte-compatible
-on-disk format (``<class> <cx> <cy> <w> <h>`` normalised 0-1, 6 decimals) for
-``scripts/prepare_dataset.py`` and ultralytics training.
+The dataset is an explicit :class:`Dataset` value object so each workflow
+stage can declare its own roots. Parsing is strict (malformed label files are
+reported, never skipped), ``validate_boxes`` clamps boxes to the image, and
+the on-disk format (``<class> <cx> <cy> <w> <h>`` normalised 0-1, 6 decimals)
+feeds ``scripts/prepare_dataset.py`` and ultralytics training unchanged.
 """
 
 from __future__ import annotations

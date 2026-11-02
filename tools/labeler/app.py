@@ -1,8 +1,7 @@
 """FastAPI application: JSON API under ``/api``, built frontend at ``/``.
 
-Response contract (carried over from the annotate/review tools): every error
-is a JSON ``{"error": ...}`` body, and every response sets
-``Cache-Control: no-store`` so labeling state is never stale.
+Response contract: every error is a JSON ``{"error": ...}`` body, and every
+response sets ``Cache-Control: no-store`` so labeling state is never stale.
 """
 
 from __future__ import annotations

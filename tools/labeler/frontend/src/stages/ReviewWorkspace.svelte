@@ -1,13 +1,13 @@
 <script lang="ts">
   /**
-   * Review workspace: the accept/reject workflow of tools/review.md.
+   * Review workspace: the accept/reject workflow over bootstrap predictions.
    *
-   * Ports the behaviour of tools/review.html: one keystroke per crop (y/n),
-   * decision-free browsing, fit-to-window display, and the outcome messages.
-   * Decisions are destructive and immediate (no undo) — accept writes the
-   * label before deleting the prediction, reject only discards the prediction.
-   * The shared BoxEditor is used read-only: predictions are display-only here;
-   * wrong ones are fixed in the annotate stage after rejecting.
+   * One keystroke per crop (y/n), decision-free browsing, fit-to-window
+   * display, and explicit outcome messages. Decisions are destructive and
+   * immediate (no undo) — accept writes the label before deleting the
+   * prediction, reject only discards the prediction. The shared BoxEditor is
+   * used read-only: predictions are display-only here; wrong ones are fixed
+   * in the annotate stage after rejecting.
    */
   import { onMount } from "svelte";
 

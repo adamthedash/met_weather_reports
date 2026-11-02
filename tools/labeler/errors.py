@@ -1,8 +1,8 @@
 """The API error type: an HTTP error with a JSON-safe message.
 
-Every error the API returns is a JSON ``{"error": ...}`` body (the contract of
-the annotate/review tools); :class:`ApiError` carries the status code and the
-client-safe message, and ``app.py`` turns it into that response.
+Every error the API returns is a JSON ``{"error": ...}`` body (the API
+contract); :class:`ApiError` carries the status code and the client-safe
+message, and ``app.py`` turns it into that response.
 """
 
 from __future__ import annotations

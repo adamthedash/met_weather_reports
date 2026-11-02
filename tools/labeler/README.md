@@ -1,43 +1,15 @@
 # labeler — combined, extensible annotation tool
 
-The successor to `tools/annotate.py` and `tools/review.py`: one application
-covering manual bounding-box labeling and accept/reject review of bootstrap
-predictions, structured as a registry of pluggable workflow **stages** so new
-pipeline stages (triage, spot-check, merge, correction rounds) can be added
-later without touching the shared engine.
+One application for the dataset's annotation workflows: manual bounding-box
+labeling (**annotate**) and accept/reject review of bootstrap predictions
+(**review**). It is structured as a registry of pluggable workflow **stages**
+so new pipeline stages (triage, spot-check, merge, correction rounds) can be
+added later without touching the shared engine.
 
 Stack: FastAPI + uvicorn backend, Vite + Svelte + TypeScript frontend with an
-imperative `<canvas>` box editor. The on-disk dataset layout stays
-byte-compatible with the existing pipeline
-(`scripts/bootstrap_annotations.py`, `scripts/prepare_dataset.py`,
-ultralytics training). The old tools remain runnable during the transition.
-
-Both stages are complete: **annotate** (manual bounding-box labeling) and
-**review** (accept/reject over bootstrap predictions).
-
-## Layout
-
-| Path | Role |
-|---|---|
-| `tools/labeler/app.py` | ASGI app: core `/api` routes, stage routers, built frontend at `/` |
-| `tools/labeler/main.py` | CLI flags, startup summary, uvicorn bootstrap |
-| `tools/labeler/config.py` | `Config`: bind address, dist, dataset roots |
-| `tools/labeler/dataset.py` | `Dataset` + helpers: classes, image listing, YOLO label I/O |
-| `tools/labeler/errors.py` | `ApiError` (HTTP error with a JSON-safe message) |
-| `tools/labeler/web.py` | request helpers shared by the stage routers |
-| `tools/labeler/stages/base.py` | stage seam: `Stage` contract + `summaries` |
-| `tools/labeler/stages/annotate.py` | annotate stage: queue listing + label I/O |
-| `tools/labeler/stages/review.py` | review stage: prediction queue + accept/reject decisions |
-| `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
-| `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
-| `tools/labeler/frontend/src/stages/` | workspace components + `registry.ts` (stage id → workspace) |
-
-## Toolchains
-
-- **Python**: the pixi environment at the repo root (adds `fastapi`, `uvicorn`
-  to `pixi.toml`; PyYAML stays for `data.yaml` parsing).
-- **Node.js**: ≥ 20 on `PATH` with pnpm (tested with Node 24 / pnpm 11) for
-  the Vite build. Not managed by pixi; `pnpm-lock.yaml` is tracked.
+imperative `<canvas>` box editor. The on-disk dataset layout is byte-compatible
+with the surrounding pipeline (`scripts/bootstrap_annotations.py`,
+`scripts/prepare_dataset.py`, ultralytics training).
 
 ## Quick start
 
@@ -46,9 +18,8 @@ just labeler        # pnpm install + vite build, then serve on http://127.0.0.1:
 ```
 
 Open the URL in a browser (forward the port first when working over SSH).
-`Ctrl+C` stops the server. CLI flags: `--images`, `--labels`, `--predictions`,
-`--data-yaml` (dataset paths, defaults under `datasets/digits`), `--host`,
-`--port` (default 8125), `--dist` (built frontend directory).
+The top bar switches between the stages (`/annotate`, `/review` deep links).
+`Ctrl+C` stops the server.
 
 Development, in two terminals:
 
@@ -57,11 +28,129 @@ just labeler-api    # uvicorn --reload on 127.0.0.1:8125
 just labeler-ui     # vite dev server on http://127.0.0.1:5173 (proxies /api)
 ```
 
+CLI flags (all optional):
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--images` | `datasets/digits/images` | root directory of crop images |
+| `--labels` | `datasets/digits/labels` | output root for YOLO label files (mirrors the images tree) |
+| `--predictions` | `datasets/digits/predictions` | prediction files to review (mirrors the images tree) |
+| `--data-yaml` | `datasets/digits/data.yaml` | class names (file must exist and parse) |
+| `--host` | `127.0.0.1` | bind address |
+| `--port` | `8125` | port |
+| `--dist` | `tools/labeler/frontend/dist` | built frontend directory |
+
+## Data layout
+
+```
+datasets/digits/
+├── data.yaml                              # classes: 0-9, dash, dot
+├── images/<source-id>/<r>_<c>.png         # one crop per table cell
+├── labels/<source-id>/<r>_<c>.txt         # YOLO labels (5 columns)
+└── predictions/<source-id>/<r>_<c>.txt    # bootstrap model output (6 columns)
+```
+
+A label file holds one line per character box, normalised to 0-1 at 6 decimals:
+
+```
+<class> <cx> <cy> <w> <h>
+```
+
+A prediction file adds a confidence column (written by
+`scripts/bootstrap_annotations.py`, consumed and deleted by review):
+
+```
+<class> <cx> <cy> <w> <h> <conf>
+```
+
+Prediction files are intentionally not loadable as YOLO labels; only accepted
+files under `labels/` are.
+
+Semantics shared with the training pipeline (`scripts/prepare_dataset.py`
+treats them identically):
+
+- **label file exists (any content)** → crop is *done/annotated*
+- **empty label file** → done but nothing to label (background/ignored):
+  written by annotate's *mark empty* action, or by accepting an empty
+  prediction in review
+- **non-empty** → crop has labeled characters
+- **prediction file + no label file** → in the review queue
+- **prediction file for an annotated or missing crop** → stale: ignored by the
+  queue, pruned by the next bootstrap run
+
+New source pages need no setup: any directory tree of images placed under the
+images root is picked up on the next load, with labels and predictions mirrored
+into the same subpath.
+
+## Workflows
+
+### annotate (`/annotate`)
+
+Draw character boxes on the crops. The current class is sticky: pick a class
+once (key or palette chip) and every new box inherits it. Coordinates are
+image pixels on screen, normalised on save; edits autosave 600 ms after the
+last change, are flushed before navigating, and are guarded by `beforeunload`.
+Crops, zoom and view mode resume where you left off (`localStorage`, keys
+`labeler.annotate.*`).
+
+| Key | Action |
+|---|---|
+| drag | draw a box (needs a current class) |
+| shift-click / shift-drag | select / select & move a box |
+| drag selected box | move |
+| drag handle | resize selected box |
+| right-click | delete box under cursor |
+| `0`–`9`, `.`, `-` | assign class to selected box + set current class |
+| `←` `→` / `a` `d` | previous / next crop |
+| `⏎` | save & next |
+| `x` | mark crop empty/ignored & next |
+| `z` | undo (100 steps) |
+| `⌫` / `Del` | delete selected box |
+| `Esc` | cancel drag / deselect |
+| `f` | cycle view mode: all → annotated → non-annotated |
+| `[` / `]` | zoom out / in |
+| `Ctrl+S` | save now |
+
+The view mode restricts prev/next only — the displayed crop stays put — so the
+same queue supports both fast batch runs (non-annotated) and review passes over
+already-labeled crops (annotated). Selection is anchored on the crop's path,
+never on list position: a save can never detach the displayed annotations from
+its file. A done crop with zero boxes shows an `EMPTY` badge (hidden as soon as
+a box is drawn).
+
+### review (`/review`)
+
+One keystroke per crop over the bootstrap predictions. Predicted boxes are
+display-only here (tagged with class and confidence); wrong predictions are
+rejected and fixed in the annotate stage.
+
+| Key | Action |
+|---|---|
+| `y` | accept: prediction becomes a label file, prediction deleted |
+| `n` | reject: prediction discarded, crop stays non-annotated |
+| `←` `→` / `a` `d` | previous / next (no decision) |
+
+- **accept** drops the confidence column and writes the label byte-compatible
+  with annotate's output. An empty prediction accepts to an empty label — the
+  crop is confirmed as background/ignored. The label is written **before** the
+  prediction is deleted, so an interrupted accept leaves a stale prediction
+  (cleaned up later) rather than losing work. Existing labels are never
+  overwritten: a crop annotated in the meantime gets its stale prediction
+  dropped instead and the outcome is reported.
+- **reject** deletes only the prediction file; the crop returns to the
+  annotate queue (a future bootstrap run may predict it again).
+- Decisions are destructive and immediate — there is no undo. Wrong
+  predictions are cheap to regenerate, wrong labels are cheap to fix.
+- Empty predictions show a `PREDICTED EMPTY` badge; malformed prediction files
+  are flagged with the parse error and can only be rejected or skipped, never
+  accepted.
+- Decided crops never return to the queue; stale prediction files are counted
+  in the header and ignored.
+
 ## API contract
 
-Errors are always JSON `{"error": ...}` (400/404/413/500); every response sets
-`Cache-Control: no-store` so labeling state is never stale — same contract as
-the annotate/review tools.
+Errors are always JSON `{"error": ...}` (400/404/413/500) and every response
+sets `Cache-Control: no-store`, so labeling state is never stale.
 
 Core routes:
 
@@ -72,7 +161,7 @@ Core routes:
 | `GET /api/classes` | `{"classes": [...]}` (from `data.yaml`, strict) |
 | `GET /api/image?path=` | raw crop image bytes |
 | `GET /api/docs` | OpenAPI explorer |
-| `GET /` | built frontend (503 with a hint when `frontend/dist` is missing) |
+| `GET /` | built frontend (503 with a build hint when `dist/` is missing) |
 
 Annotate stage (mounted at `/api/annotate`):
 
@@ -90,33 +179,34 @@ Review stage (mounted at `/api/review`):
 | `GET /api/review/prediction?path=` | `{"path", "boxes": [{cls, cx, cy, w, h, conf}]}` (normalised) |
 | `POST /api/review/decision` | `{"path", "accept": true\|false}` → `{"ok", "accepted", "saved", "already_annotated", "remaining"}` |
 
-Dataset semantics are unchanged: label file exists ⇒ crop done, empty file ⇒
-done-but-background, malformed label files are reported (400) never skipped,
-saves are clamped to the image and written as 5-column YOLO at 6 decimals.
+On-disk parsing is strict: malformed label or prediction lines are reported
+(400), never silently skipped or promoted into the dataset.
 
-## Annotate workflow
+## Architecture / layout
 
-Same keymap as `tools/annotate.html`: drag draws a box (current class needed),
-shift-click/drag selects and moves, handles resize, right-click deletes,
-`0-9 . -` assign the class (sticky), `← →`/`a d` navigate, `⏎` save & next,
-`x` mark empty, `z` undo, `⌫` delete, `Esc` cancel/deselect, `f` cycles the
-view mode (all → annotated → non-annotated), `[ ]` zoom, `Ctrl+S` save.
-Autosave 600 ms after the last edit; last crop/zoom/view mode resume from
-`localStorage` (`labeler.annotate.*`).
+| Path | Role |
+|---|---|
+| `tools/labeler/app.py` | ASGI app: core `/api` routes, stage routers, built frontend at `/` |
+| `tools/labeler/main.py` | CLI flags, startup summary, uvicorn bootstrap |
+| `tools/labeler/config.py` | `Config`: bind address, dist, dataset roots |
+| `tools/labeler/dataset.py` | `Dataset` + helpers: classes, image listing, label/prediction I/O |
+| `tools/labeler/errors.py` | `ApiError` (HTTP error with a JSON-safe message) |
+| `tools/labeler/web.py` | request helpers shared by the stage routers |
+| `tools/labeler/stages/base.py` | stage seam: `Stage` contract + `summaries` |
+| `tools/labeler/stages/annotate.py` | annotate stage: queue listing + label I/O |
+| `tools/labeler/stages/review.py` | review stage: prediction queue + accept/reject decisions |
+| `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
+| `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
+| `tools/labeler/frontend/src/lib/` | geometry, palette, typed API client |
+| `tools/labeler/frontend/src/stages/` | workspace components + `registry.ts` (stage id → workspace) |
 
-## Review workflow
+## Toolchains
 
-Same keymap as `tools/review.html`: `y` accept (prediction becomes a YOLO
-label file, confidence column dropped; empty predictions confirm the crop as
-background), `n` reject (prediction discarded, crop stays non-annotated for
-the annotate stage), `← →`/`a d` browse without deciding. The crop is fitted
-to the canvas area at integer magnification; predicted boxes show class and
-confidence. Malformed prediction files are flagged and can only be rejected
-or skipped, never accepted. Decisions are destructive and immediate (no
-undo): accept writes the label before deleting the prediction, existing
-labels are never overwritten (a crop annotated in the meantime gets its stale
-prediction dropped with `already_annotated` reported), and `predictions/`
-stays owned by `scripts/bootstrap_annotations.py` (regeneration and pruning).
+- **Python**: the pixi environment at the repo root (`fastapi`, `uvicorn`,
+  PyYAML for `data.yaml` parsing).
+- **Node.js**: ≥ 20 on `PATH` with pnpm (tested with Node 24 / pnpm 11) for
+  the Vite build. Not managed by pixi; `pnpm-lock.yaml` is tracked and
+  `pnpm-workspace.yaml` pins the build-script policy (`allowBuilds`).
 
 ## Adding a stage
 
@@ -127,3 +217,16 @@ factory (API router mounted at `/api/<id>`) registered in
 `frontend/src/stages/registry.ts` (workspace component, usually built from the
 shared `BoxEditor`). `stages/annotate.py` is the worked example. The shared
 engine and core routes stay untouched.
+
+## Notes & limitations
+
+- **Localhost tool, no authentication** — use it through your machine or an
+  SSH tunnel; do not expose the port.
+- **Axis-aligned boxes only** — YOLO format has no rotation.
+- **Single selection** in the annotate editor; crops hold only a few boxes.
+- **Review decisions are irreversible** by design (cheap to regenerate or
+  re-annotate instead of undo).
+- **`predictions/` is owned by `scripts/bootstrap_annotations.py`** — review
+  only deletes files it decides; regeneration and pruning stay in the script.
+- **Class set is data-driven** — editing `data.yaml` names changes the palette
+  and keyboard map on the next load; ids must stay contiguous from 0.

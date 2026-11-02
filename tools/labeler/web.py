@@ -1,8 +1,8 @@
 """Request helpers shared by the stage routers.
 
-These encode the request conventions of the annotate/review tools: query
-parameters are checked one by one with clear 400s, and JSON bodies are parsed
-leniently (an empty body reads as ``{}``) but validated strictly by the caller.
+These encode the request conventions of the stage APIs: query parameters are
+checked one by one with clear 400s, and JSON bodies are parsed leniently (an
+empty body reads as ``{}``) but validated strictly by the caller.
 """
 
 from __future__ import annotations

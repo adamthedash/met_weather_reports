@@ -1,12 +1,6 @@
 marimo:
     pixi run marimo edit
 
-annotate:
-    pixi run python tools/annotate.py
-
-review:
-    pixi run python tools/review.py
-
 prep_dataset:
     pixi run python scripts/prepare_dataset.py --dataset datasets/digits
 

@@ -1,7 +1,6 @@
 """The review stage: accept/reject review over the bootstrap predictions.
 
-Ported from ``tools/review.py``. Per crop of the queue (crops with a
-prediction file and no label file):
+Per crop of the queue (crops with a prediction file and no label file):
 
 - **accept** promotes the prediction to a YOLO label file (confidence column
   dropped, byte-compatible with the annotate stage's writer) and deletes the

@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
    * Shared canvas box editor: renders a crop with its boxes and runs the
-   * draw/move/resize/delete gestures of tools/annotate.html.
+   * draw/move/resize/delete gestures of the annotate workflow.
    *
    * State lives in the parent workspace (via `bind:boxes` / `bind:selected`);
    * the editor owns only the in-progress gesture and reports committed edits

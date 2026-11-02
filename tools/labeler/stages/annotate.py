@@ -1,9 +1,9 @@
 """The annotate stage: manual bounding-box editing over the crop queue.
 
-Ported from ``tools/annotate.py``'s HTTP layer: the queue listing, label
-read/write, and the validation rules are unchanged (including the response
-shapes the UI depends on: ``{path, done, has_labels}`` entries and the
-``{ok, saved, has_labels}`` save result).
+Exposes the queue listing, label read/write, and validation with the response
+shapes the UI depends on: ``{path, done, has_labels}`` listing entries and the
+``{ok, saved, has_labels}`` save result. Label files are written in the strict
+YOLO on-disk format of ``tools/labeler/dataset.py``.
 """
 
 from __future__ import annotations

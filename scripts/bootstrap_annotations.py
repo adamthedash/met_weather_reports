@@ -44,7 +44,7 @@ def load_classes(yaml_path: Path) -> list[str]:
     """Read class names from the int-keyed ``names:`` mapping of a YOLO data.yaml.
 
     ``data.yaml`` is the single source of truth for classes; nothing falls
-    back to defaults. Same contract as ``tools/annotate.py:load_classes``.
+    back to defaults. Same contract as ``tools/labeler.dataset.load_classes``.
 
     Args:
         yaml_path: Path to the dataset's ``data.yaml``.
@@ -198,7 +198,8 @@ def write_prediction(path: Path, boxes: list[Prediction]) -> None:
 
     Each line is ``cls cx cy w h conf`` with normalised coordinates and
     six-decimal formatting: the five label columns of
-    ``tools/annotate.py:write_labels`` plus a 6th confidence column in 0-1. An
+    ``tools/labeler.dataset.Dataset.write_labels`` plus a 6th confidence column
+    in 0-1. An
     empty `boxes` list writes an empty file, a predicted background crop.
 
     Args:
