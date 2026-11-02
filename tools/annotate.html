@@ -166,10 +166,11 @@
     <div id="empty-note"></div>
     <h3>keys</h3>
     <ul id="help">
-      <li><kbd>drag</kbd><span>draw box (gets the current class)</span></li>
-      <li><kbd>click</kbd><span>select box</span></li>
-      <li><kbd>drag box</kbd><span>move</span></li>
-      <li><kbd>drag handle</kbd><span>resize</span></li>
+      <li><kbd>drag</kbd><span>draw box (needs a current class)</span></li>
+      <li><kbd>shift-click</kbd><span>select box</span></li>
+      <li><kbd>shift-drag</kbd><span>select &amp; move box</span></li>
+      <li><kbd>drag box</kbd><span>move (selected box only)</span></li>
+      <li><kbd>drag handle</kbd><span>resize selected box</span></li>
       <li><kbd>right-click</kbd><span>delete box</span></li>
       <li><kbd>0-9 . -</kbd><span>class (selected box + current)</span></li>
       <li><kbd>← → / a d</kbd><span>prev / next crop</span></li>
@@ -215,9 +216,8 @@ if (state.zoomInit) state.zoom = Number(localStorage.getItem("annotate.zoom")) |
 
 // ---------------------------------------------------------------- colours
 
-/** Deterministic colour for a class index; grey when the class is unassigned. */
+/** Deterministic colour for a class index. */
 function classColor(cls, alpha = 1) {
-  if (cls === null || cls === undefined) return `rgba(150,150,150,${alpha})`;
   const h = Math.round((cls * 137.508) % 360);
   return `hsla(${h}, 65%, 52%, ${alpha})`;
 }
@@ -339,20 +339,12 @@ async function loadCurrent() {
   render();
 }
 
-/** Save the current boxes as YOLO labels; false if boxes lack classes or saving fails. */
+/** Save the current boxes as YOLO labels; false when saving fails. */
 async function save() {
   clearTimeout(state.saveTimer);
   state.saveTimer = null;
   const e = entry();
   if (!e || !state.img) return true;
-  const unassigned = state.boxes.filter((b) => b.cls === null).length;
-  if (unassigned > 0) {
-    setStatus(
-      `⚠ ${unassigned} box${unassigned === 1 ? "" : "es"} without a class — press 0-9, . or -`,
-      "error",
-    );
-    return false;
-  }
   const iw = state.img.width, ih = state.img.height;
   const boxes = state.boxes.map((b) => ({
     cls: b.cls,
@@ -586,7 +578,14 @@ function pos(e) {
 
 // ---------------------------------------------------------------- mouse
 
-/** Start a resize, move, or draw operation from the mouse position. */
+/**
+ * Start a resize, move, or draw operation from the mouse position.
+ *
+ * A plain press only edits the selected box (move its interior, resize via a
+ * handle); anywhere else — including inside unselected boxes — draws a new box.
+ * A shift+press is the select-and-move gesture: it selects the topmost box
+ * under the cursor and starts moving it (handles never resize with shift).
+ */
 function onMouseDown(e) {
   if (e.button !== 0 || !state.img) return;
   e.preventDefault();
@@ -594,29 +593,48 @@ function onMouseDown(e) {
   const iw = state.img.width, ih = state.img.height;
   if (p.x < 0 || p.y < 0 || p.x > iw || p.y > ih) return;
 
-  const handle = hitHandle(p.x, p.y);
-  if (handle !== null) {
-    state.op = {
-      type: "resize", id: handle, idx: state.selected,
-      b0: { ...state.boxes[state.selected] }, start: p,
-      snapshot: snapshot(), moved: false,
-    };
-    return;
-  }
   const idx = hitBox(p.x, p.y);
-  if (idx >= 0) {
-    if (state.selected !== idx) {
-      state.selected = idx;
-      renderChrome();
-      render();
+  if (e.shiftKey) {
+    if (idx >= 0) {
+      if (state.selected !== idx) {
+        state.selected = idx;
+        renderChrome();
+        render();
+      }
+      state.op = {
+        type: "move", idx, b0: { ...state.boxes[idx] }, start: p,
+        snapshot: snapshot(), moved: false,
+      };
+      return;
     }
-    state.op = {
-      type: "move", idx, b0: { ...state.boxes[idx] }, start: p,
-      snapshot: snapshot(), moved: false,
-    };
+    // shift on empty space falls through to the plain behaviour below
+  } else {
+    const handle = hitHandle(p.x, p.y);
+    if (handle !== null) {
+      state.op = {
+        type: "resize", id: handle, idx: state.selected,
+        b0: { ...state.boxes[state.selected] }, start: p,
+        snapshot: snapshot(), moved: false,
+      };
+      return;
+    }
+    if (idx >= 0 && idx === state.selected) {
+      state.op = {
+        type: "move", idx, b0: { ...state.boxes[idx] }, start: p,
+        snapshot: snapshot(), moved: false,
+      };
+      return;
+    }
+  }
+
+  // a press outside the selected box deselects and draws a new box
+  state.selected = -1;
+  if (state.currentClass === null) {
+    setStatus("pick a class first: press 0-9, . or - or click a chip", "error");
+    renderChrome();
+    render();
     return;
   }
-  state.selected = -1;
   state.op = { type: "draw", start: p, cur: p };
   renderChrome();
   render();
@@ -666,13 +684,10 @@ function onMouseUp(e) {
     const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
     if (w * state.zoom >= 3 && h * state.zoom >= 3) {
       pushUndo();
+      // new boxes are never auto-selected; shift-click to edit this one
       state.boxes.push({ cls: state.currentClass, x, y, w, h });
-      state.selected = state.boxes.length - 1;
       state.dirty = true;
       scheduleSave();
-      if (state.currentClass === null) {
-        setStatus("pick a class for this box: 0-9, . (dot), - (dash)", "error");
-      }
     }
   } else if (op.moved) {
     state.undoStack.push(op.snapshot);
@@ -727,7 +742,7 @@ function render() {
     ctx.strokeStyle = color;
     ctx.strokeRect(x, y, w, h);
 
-    const name = b.cls === null ? "?" : state.classes[b.cls];
+    const name = state.classes[b.cls];
     ctx.font = "12px system-ui, sans-serif";
     const tw = ctx.measureText(name).width;
     const ty = y >= 16 ? y - 15 : y + h;
@@ -796,7 +811,7 @@ function renderBoxList() {
   state.boxes.forEach((b, i) => {
     const li = document.createElement("li");
     if (i === state.selected) li.className = "sel";
-    const name = b.cls === null ? "?" : state.classes[b.cls];
+    const name = state.classes[b.cls];
     li.innerHTML =
       `<span class="swatch" style="background:${classColor(b.cls)}"></span>` +
       `<span>${name}</span>` +

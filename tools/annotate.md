@@ -127,18 +127,24 @@ kept in **image pixels** everywhere and normalized only at save time.
   badge in the image's top-left corner, which disappears as soon as a box is
   drawn. The canvas backing store is scaled by `devicePixelRatio` for sharp
   text.
-- **Mouse model** — mousedown hit-tests in priority order: selected-box handle
-  (resize) → box interior (select + move) → empty space (draw new box).
-  Drags clamp to the image bounds; boxes under 3 screen-px are discarded as
-  accidental clicks. Right-click deletes the box under the cursor. `Esc`
+- **Mouse model** — a plain mousedown hit-tests in priority order: selected-box
+  handle (resize) → selected-box interior (move) → anything else, *including
+  unselected box interiors* (draw a new box; requires a current class). Boxes
+  are only ever moved or resized while selected; `Shift`+press is the
+  select-and-move gesture — it selects the topmost box under the cursor and
+  starts moving it (a click without dragging just selects; clicking the
+  selected box keeps it selected, and handles never resize while `Shift` is
+  held). Drags clamp to the image bounds; boxes under 3 screen-px are discarded
+  as accidental clicks. Right-click deletes the box under the cursor. `Esc`
   cancels an in-progress drag (restoring the pre-drag state) or deselects.
 - **Class assignment** — the class palette is generated from `data.yaml`
   names: single-character names map to that key, `dash` → `-`, `dot` → `.`.
   Pressing a key assigns the class to the selected box *and* sets the "current"
   class, which new boxes inherit automatically (sticky — draw four `1`s in a
-  row without touching the keyboard). Boxes drawn before any class is chosen
-  render grey with `?` and **block saving** with a visible warning, so no crop
-  is ever silently saved with missing class info.
+  row without touching the keyboard). Drawing is refused until a class has been
+  chosen (via key or palette chip) with a visible hint, so every box always
+  carries class info; new boxes are never auto-selected (shift-click to edit
+  one).
 - **Persistence** — autosave POSTs 600 ms after the last edit; navigation
   flushes before switching crops; a `beforeunload` guard covers unsaved edits.
   Undo keeps a 100-deep stack of pre-mutation snapshots (covers draw, move,
@@ -154,8 +160,9 @@ kept in **image pixels** everywhere and normalized only at save time.
 
 | Key | Action |
 |---|---|
-| drag | draw a box (gets the current class) |
-| click / drag inside | select / move a box |
+| drag | draw a box (needs a current class) |
+| shift-click / shift-drag | select / select & move a box |
+| drag selected box | move |
 | drag handle | resize selected box |
 | right-click | delete box under cursor |
 | `0`–`9`, `.`, `-` | assign class (digit, dot, dash) + set current class |
@@ -177,8 +184,8 @@ kept in **image pixels** everywhere and normalized only at save time.
   is purely a navigation predicate over prev/next.
 - **Axis-aligned boxes only** — YOLO format has no rotation; the crop grid is
   close to axis-aligned anyway.
-- **Single selection** — shift-multi-select is intentionally omitted; cells
-  hold only 1–3 characters.
+- **Single selection** — `Shift`-click selects exactly one box;
+  shift-multi-select is intentionally omitted; cells hold only 1–3 characters.
 - **Class set is data-driven** — editing `data.yaml` names changes the palette
   and keyboard map on next load; ids must stay contiguous from 0.
 - **Strict on-disk format** — hand-edited label files with malformed lines are
