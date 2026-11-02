@@ -1,55 +1,33 @@
+/* Global shell styles (the annotate.html look). Workspaces style themselves. */
 :root {
   color-scheme: dark;
-  font-family: system-ui, sans-serif;
+  --bg: #16181d;
+  --panel: #1f2229;
+  --edge: #2e323b;
+  --text: #e6e6e6;
+  --dim: #9aa0ab;
+  --accent: #4d9de0;
+  --error: #e06c5a;
+  --ok: #6cc08a;
+  font: 13px/1.45 system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  background: #14171c;
-  color: #e6e9ee;
-}
-
-main {
-  max-width: 52rem;
-  margin: 0 auto;
-  padding: 2rem 1.5rem;
-}
-
-h1 {
-  font-size: 1.4rem;
-  margin: 0 0 0.25rem;
-}
-
-.status {
-  color: #9aa4b2;
-  margin: 0 0 2rem;
-}
-
-ul.stages {
-  list-style: none;
-  padding: 0;
-  display: grid;
-  gap: 0.75rem;
-}
-
-ul.stages li {
-  border: 1px solid #2a2f38;
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-}
-
-ul.stages li strong {
-  display: block;
-}
-
-ul.stages li span {
-  color: #9aa4b2;
-  font-size: 0.9rem;
-}
-
-.empty {
-  border: 1px dashed #2a2f38;
-  border-radius: 6px;
-  padding: 1.5rem;
-  color: #9aa4b2;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
 }

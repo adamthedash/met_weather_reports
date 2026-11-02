@@ -1,5 +1,7 @@
 /** Typed fetch helpers for the labeler JSON API. */
 
+import type { BoxN, Listing } from "./types";
+
 /** Shape every API error response has (see tools/labeler/app.py). */
 export type ApiError = { error: string };
 
@@ -7,8 +9,8 @@ export type ApiError = { error: string };
 export type StageSummary = { id: string; title: string; description: string };
 
 /** GET `url` and parse the JSON body, throwing the API's error message on failure. */
-export async function fetchJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+export async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(url, opts);
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
@@ -21,3 +23,39 @@ export async function fetchJSON<T>(url: string): Promise<T> {
   }
   return (await res.json()) as T;
 }
+
+/** Load an image URL into an HTMLImageElement, as a promise. */
+export function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("failed to load image"));
+    img.src = url;
+  });
+}
+
+/** Save result of POST /api/annotate/labels. */
+export type SaveResult = { ok: boolean; saved: number; has_labels: boolean };
+
+export const api = {
+  /** Every registered workflow stage. */
+  stages: () => fetchJSON<{ stages: StageSummary[] }>("/api/stages"),
+  /** The dataset's class names. */
+  classes: () => fetchJSON<{ classes: string[] }>("/api/classes"),
+  /** URL of a crop image (for <img src> / loadImage). */
+  imageURL: (path: string) => `/api/image?path=${encodeURIComponent(path)}`,
+  /** The annotate queue listing. */
+  list: () => fetchJSON<Listing>("/api/annotate/list"),
+  /** The crop's current boxes (normalised), empty when unlabeled. */
+  labels: (path: string) =>
+    fetchJSON<{ path: string; boxes: BoxN[] }>(
+      `/api/annotate/labels?path=${encodeURIComponent(path)}`,
+    ),
+  /** Save the crop's boxes; an empty list marks the crop empty. */
+  saveLabels: (path: string, boxes: BoxN[]) =>
+    fetchJSON<SaveResult>("/api/annotate/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, boxes }),
+    }),
+};

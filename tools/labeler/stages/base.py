@@ -7,45 +7,37 @@ A *stage* (a pipeline stage) bundles three things:
 - the **artifacts** it consumes and produces (mirrored sidecar files under a
   dataset root, e.g. YOLO label or prediction files).
 
-Each stage registers an API router (mounted under ``/api/<id>``) on the backend
-and a workspace component (registered under the same id in
+Each stage contributes an API router (mounted under ``/api/<id>``) on the
+backend and a workspace component (registered under the same id in
 ``frontend/src/stages/registry.ts``) on the frontend. Adding a stage touches
-only those two files; the shared engine and core routes stay unchanged.
-
-This module holds the registry contract only; the annotate and review stages
-land with the dataset layer.
+only ``stages/__init__.py`` (one entry in ``build_stages``) and that frontend
+registry; the shared engine and core routes stay unchanged.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+from fastapi import APIRouter
 
 
 @dataclass(frozen=True)
 class Stage:
-    """Static description of one workflow stage."""
+    """One workflow stage: its static description and API router.
+
+    The router's routes are mounted at ``/api/<id>``; the matching frontend
+    workspace registers under the same id.
+    """
 
     id: str
     title: str
     description: str
+    router: APIRouter
 
 
-REGISTRY: list[Stage] = []
-
-
-def register(stage: Stage) -> None:
-    """Add `stage` to the registry.
-
-    Raises:
-        ValueError: If another stage with the same id is already registered.
-    """
-    if any(s.id == stage.id for s in REGISTRY):
-        raise ValueError(f"duplicate stage id: {stage.id!r}")
-    REGISTRY.append(stage)
-
-
-def summaries() -> list[dict[str, str]]:
-    """Every registered stage as JSON-safe ``{id, title, description}`` dicts."""
+def summaries(stages: Sequence[Stage]) -> list[dict[str, str]]:
+    """Every stage as JSON-safe ``{id, title, description}`` dicts."""
     return [
-        {"id": s.id, "title": s.title, "description": s.description} for s in REGISTRY
+        {"id": s.id, "title": s.title, "description": s.description} for s in stages
     ]

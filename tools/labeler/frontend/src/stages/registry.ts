@@ -1,14 +1,12 @@
 /**
  * Frontend stage registry: maps a stage id (same id as the backend registry in
- * tools/labeler/stages/base.py) to its workspace component and keymap.
- *
- * The annotate and review workspaces land with the shared engine; a new stage
- * adds one entry here and one backend stage module.
+ * tools/labeler/stages/) to its workspace component. A new stage adds one
+ * entry here and one backend stage module; the shared engine stays untouched.
  */
-export type StageWorkspace = {
-  id: string;
-  /** Svelte component rendering the stage's workspace. */
-  component: unknown;
-};
+import type { Component } from "svelte";
 
-export const stages: StageWorkspace[] = [];
+import AnnotateWorkspace from "./AnnotateWorkspace.svelte";
+
+export const workspaces: Record<string, Component> = {
+  annotate: AnnotateWorkspace,
+};
