@@ -62,7 +62,9 @@ Semantics used by the tool and by `train.txt`/`val.txt`:
 - **label file exists (any content)** → crop is *done* (not offered by
   prev/next while the "hide done" filter is on)
 - **empty label file** → crop is done but contains nothing to label
-  (ignored/background). The UI's *mark empty* action (`x`) writes one.
+  (ignored/background). The UI's *mark empty* action (`x`) writes one, and the
+  UI overlays an `EMPTY` badge on such crops (hidden again while any box is
+  drawn).
 - **non-empty** → crop has labeled characters
 
 New source pages need no setup: any directory tree of images placed under the
@@ -120,8 +122,11 @@ kept in **image pixels** everywhere and normalized only at save time.
 - **Rendering** — the crop is drawn magnified with
   `imageSmoothingEnabled = false` (and CSS `image-rendering: pixelated`) so
   pixels stay crisp; boxes are semi-transparent fills + colored strokes, each
-  tagged with its class name. Selected boxes show 8 resize handles. The canvas
-  backing store is scaled by `devicePixelRatio` for sharp text.
+  tagged with its class name. Selected boxes show 8 resize handles. A crop that
+  is done but holds no boxes (marked empty) gets a small fixed-size `EMPTY`
+  badge in the image's top-left corner, which disappears as soon as a box is
+  drawn. The canvas backing store is scaled by `devicePixelRatio` for sharp
+  text.
 - **Mouse model** — mousedown hit-tests in priority order: selected-box handle
   (resize) → box interior (select + move) → empty space (draw new box).
   Drags clamp to the image bounds; boxes under 3 screen-px are discarded as

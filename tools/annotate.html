@@ -265,6 +265,11 @@ function entry() {
   return state.images.find((e) => e.path === state.currentPath) || null;
 }
 
+/** Whether the crop on display is marked empty: done on disk, zero boxes now. */
+function isEmptyMarked() {
+  return !!entry()?.done && state.boxes.length === 0;
+}
+
 /** Fetch classes and the crop listing, then restore the last-viewed crop. */
 async function loadList() {
   const [cls, listing] = await Promise.all([
@@ -367,6 +372,7 @@ async function save() {
     e.has_labels = boxes.length > 0;
     setStatus(`saved ${boxes.length} box${boxes.length === 1 ? "" : "es"} ✓`, "ok");
     renderChrome();
+    render();
     return true;
   } catch (err) {
     setStatus("save failed: " + err.message, "error");
@@ -737,6 +743,17 @@ function render() {
       }
     }
   });
+
+  // fixed-size "EMPTY" badge in the image's top-left corner for crops that are
+  // done but hold no boxes; drawn after the boxes so it stays on top
+  if (isEmptyMarked()) {
+    ctx.font = "12px system-ui, sans-serif";
+    const tw = ctx.measureText("EMPTY").width;
+    ctx.fillStyle = "rgba(0,0,0,0.72)";
+    ctx.fillRect(6, 6, tw + 8, 15);
+    ctx.fillStyle = "#fff";
+    ctx.fillText("EMPTY", 10, 17.5);
+  }
 }
 
 /** Update the status line with an optional style kind ("ok" or "error"). */
