@@ -8,6 +8,7 @@ models
 runs
 **/node_modules
 **/dist
+data/*
 
 # frontend toolchain: pnpm manages dependencies; pnpm-lock.yaml is tracked,
 # so keep npm's lockfile and pnpm debug logs out of the tree
