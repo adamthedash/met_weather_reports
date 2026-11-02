@@ -25,9 +25,11 @@ import json
 import math
 import mimetypes
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import TypedDict
 from urllib.parse import parse_qs, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -41,13 +43,26 @@ class ApiError(Exception):
     """An HTTP error with a JSON-safe message."""
 
     def __init__(self, status: int, message: str) -> None:
+        """Store the HTTP status alongside the client-safe message."""
         super().__init__(message)
-        self.status = status
-        self.message = message
+        self.status: int = status
+        self.message: str = message
+
+
+class Box(TypedDict):
+    """A YOLO bounding box in normalised 0-1 coordinates."""
+
+    cls: int
+    cx: float
+    cy: float
+    w: float
+    h: float
 
 
 @dataclass
 class Config:
+    """Runtime configuration: dataset roots and the class-name list."""
+
     images_root: Path
     labels_root: Path
     classes: list[str]
@@ -61,7 +76,11 @@ CFG: Config  # populated in main()
 
 
 def load_classes(yaml_path: Path) -> list[str]:
-    """Parse the ``names:`` mapping of a YOLO data.yaml (int key -> label)."""
+    """Parse the ``names:`` mapping of a YOLO data.yaml (int key -> label).
+
+    Falls back to ``FALLBACK_CLASSES`` when the file is missing or has no
+    parsable ``names:`` mapping.
+    """
     if not yaml_path.is_file():
         return list(FALLBACK_CLASSES)
     names: dict[int, str] = {}
@@ -91,7 +110,7 @@ def load_classes(yaml_path: Path) -> list[str]:
 _NUM_RE = re.compile(r"(\d+)")
 
 
-def natural_key(rel: str) -> list:
+def natural_key(rel: str) -> list[int | str]:
     """Sort key so 10_2.png sorts before 10_10.png."""
     return [int(p) if p.isdigit() else p.lower() for p in _NUM_RE.split(rel)]
 
@@ -107,7 +126,11 @@ def list_images(root: Path) -> list[str]:
 
 
 def safe_path(root: Path, rel: str) -> Path:
-    """Resolve `rel` under `root`, rejecting traversal and absolute paths."""
+    """Resolve `rel` under `root`, rejecting traversal and absolute paths.
+
+    Raises:
+        ApiError: If `rel` is empty, absolute, or escapes `root`.
+    """
     if not rel or "\\" in rel:
         raise ApiError(400, f"bad path: {rel!r}")
     parts = Path(rel)
@@ -120,13 +143,23 @@ def safe_path(root: Path, rel: str) -> Path:
 
 
 def label_path_for(rel: str) -> Path:
-    """labels root mirror of an image path: <stem>.txt in the same subdirs."""
+    """labels root mirror of an image path: <stem>.txt in the same subdirs.
+
+    Raises:
+        ApiError: If `rel` escapes the labels root.
+    """
     p = Path(rel)
     return safe_path(CFG.labels_root, (p.parent / (p.stem + ".txt")).as_posix())
 
 
-def read_labels(rel: str) -> list[dict]:
-    boxes: list[dict] = []
+def read_labels(rel: str) -> list[Box]:
+    """Read the YOLO label file mirroring `rel`; empty when absent or unlabeled.
+
+    Raises:
+        ApiError: If a label line has the wrong field count or an
+            out-of-range class.
+    """
+    boxes: list[Box] = []
     path = label_path_for(rel)
     if not path.is_file():
         return boxes
@@ -147,12 +180,18 @@ def read_labels(rel: str) -> list[dict]:
     return boxes
 
 
-def validate_boxes(raw: object) -> list[dict]:
+def validate_boxes(raw: object) -> list[Box]:
+    """Validate raw JSON boxes, clamping each to the image, and return them.
+
+    Raises:
+        ApiError: If `raw` is not a list of well-formed boxes within the
+            class range and the image bounds.
+    """
     if not isinstance(raw, list):
         raise ApiError(400, "'boxes' must be a list")
     if len(raw) > MAX_BOXES:
         raise ApiError(400, f"too many boxes (max {MAX_BOXES})")
-    boxes: list[dict] = []
+    boxes: list[Box] = []
     for i, b in enumerate(raw):
         try:
             cls = int(b["cls"])
@@ -178,7 +217,12 @@ def validate_boxes(raw: object) -> list[dict]:
     return boxes
 
 
-def write_labels(rel: str, boxes: list[dict]) -> Path:
+def write_labels(rel: str, boxes: list[Box]) -> Path:
+    """Write `boxes` to the YOLO label file mirroring `rel`; return its path.
+
+    Raises:
+        ApiError: If `rel` escapes the labels root.
+    """
     path = label_path_for(rel)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -193,6 +237,11 @@ def write_labels(rel: str, boxes: list[dict]) -> Path:
 
 
 def one_arg(query: dict[str, list[str]], key: str) -> str:
+    """Return the single value of query parameter `key`.
+
+    Raises:
+        ApiError: If the parameter is missing or empty.
+    """
     values = query.get(key)
     if not values or not values[0]:
         raise ApiError(400, f"missing query parameter {key!r}")
@@ -200,10 +249,13 @@ def one_arg(query: dict[str, list[str]], key: str) -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
+    """HTTP routes for the labeling UI and its JSON API."""
+
     server_version = "Annotate/1.0"
 
     # -- helpers ---------------------------------------------------------
     def _bytes(self, status: int, ctype: str, data: bytes) -> None:
+        """Send `data` as a response with the given status and content type."""
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
@@ -212,9 +264,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _json(self, status: int, obj: object) -> None:
+        """Send `obj` serialised as a JSON response."""
         self._bytes(status, "application/json; charset=utf-8", json.dumps(obj).encode())
 
-    def _guard(self, fn) -> None:
+    def _guard(self, fn: Callable[[], None]) -> None:
+        """Run `fn`, turning any raised error into a JSON error response."""
         try:
             fn()
         except ApiError as exc:
@@ -228,12 +282,15 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routes ----------------------------------------------------------
     def do_GET(self) -> None:
+        """Dispatch GET requests through `_get` with shared error handling."""
         self._guard(self._get)
 
     def do_POST(self) -> None:
+        """Dispatch POST requests through `_post` with shared error handling."""
         self._guard(self._post)
 
     def _get(self) -> None:
+        """Route a GET request to the UI page or one of the /api endpoints."""
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         route = parsed.path
@@ -253,6 +310,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(404, f"not found: {route}")
 
     def _post(self) -> None:
+        """Handle POST /api/labels: validate and save boxes for one image."""
         parsed = urlparse(self.path)
         if parsed.path != "/api/labels":
             raise ApiError(404, f"not found: {parsed.path}")
@@ -274,6 +332,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "saved": len(boxes), "has_labels": bool(boxes)})
 
     def _list(self) -> None:
+        """Respond with every crop's path and its labeling status."""
         images = []
         done = 0
         for rel in list_images(CFG.images_root):
@@ -286,20 +345,27 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"images": images, "total": len(images), "done": done})
 
     def _image(self, rel: str) -> None:
+        """Stream the crop image at `rel` with its guessed media type.
+
+        Raises:
+            ApiError: If no such image exists under the images root.
+        """
         path = safe_path(CFG.images_root, rel)
         if not path.is_file():
             raise ApiError(404, f"no such image: {rel}")
         ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         self._bytes(200, ctype, path.read_bytes())
 
-    def log_message(self, fmt: str, *args: object) -> None:
-        print(f"[{self.address_string()}] {fmt % args}")
+    def log_message(self, format: str, *args: object) -> None:
+        """Log each request to stdout instead of the default stderr."""
+        print(f"[{self.address_string()}] {format % args}")
 
 
 # ---------------------------------------------------------------------------
 
 
 def main() -> None:
+    """Parse CLI flags, configure the dataset, and serve until interrupted."""
     global CFG
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter

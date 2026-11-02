@@ -185,8 +185,13 @@
 <script>
 "use strict";
 
+/** Shorthand for document.getElementById. */
 const $ = (id) => document.getElementById(id);
 
+/**
+ * Global editor state shared by the UI functions below. Box coordinates are
+ * image pixels; the server exchanges normalised 0-1 coordinates.
+ */
 const state = {
   classes: [],
   shortcutMap: {},
@@ -210,12 +215,14 @@ if (state.zoomInit) state.zoom = Number(localStorage.getItem("annotate.zoom")) |
 
 // ---------------------------------------------------------------- colours
 
+/** Deterministic colour for a class index; grey when the class is unassigned. */
 function classColor(cls, alpha = 1) {
   if (cls === null || cls === undefined) return `rgba(150,150,150,${alpha})`;
   const h = Math.round((cls * 137.508) % 360);
   return `hsla(${h}, 65%, 52%, ${alpha})`;
 }
 
+/** Keyboard shortcut character for a class name, or null when it has none. */
 function shortcutFor(name) {
   if (name === "dot") return ".";
   if (name === "dash") return "-";
@@ -224,6 +231,7 @@ function shortcutFor(name) {
 
 // ---------------------------------------------------------------- data io
 
+/** fetch() as JSON, throwing the server's error message on non-OK responses. */
 async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
   const body = await res.json().catch(() => ({}));
@@ -231,6 +239,7 @@ async function fetchJSON(url, opts) {
   return body;
 }
 
+/** Load an image URL into an HTMLImageElement, as a promise. */
 function loadImage(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -240,14 +249,17 @@ function loadImage(url) {
   });
 }
 
+/** Whether listing entry `e` passes the "hide done" filter. */
 function visible(e) {
   return !state.skipDone || !e.done;
 }
 
+/** The listing entry for the crop on display, or null when none is shown. */
 function entry() {
   return state.images.find((e) => e.path === state.currentPath) || null;
 }
 
+/** Fetch classes and the crop listing, then restore the last-viewed crop. */
 async function loadList() {
   const [cls, listing] = await Promise.all([
     fetchJSON("/api/classes"),
@@ -268,6 +280,7 @@ async function loadList() {
   await loadCurrent();
 }
 
+/** Load the image and labels of the current crop, ignoring superseded loads. */
 async function loadCurrent() {
   const e = entry();
   const seq = ++state.loadSeq;
@@ -315,6 +328,7 @@ async function loadCurrent() {
   render();
 }
 
+/** Save the current boxes as YOLO labels; false if boxes lack classes or saving fails. */
 async function save() {
   clearTimeout(state.saveTimer);
   state.saveTimer = null;
@@ -354,15 +368,18 @@ async function save() {
   }
 }
 
+/** Save now when a change is pending; resolves to whether the state is clean. */
 async function flushSave() {
   return state.dirty || state.saveTimer ? await save() : true;
 }
 
+/** Debounce an autosave 600 ms after the last edit. */
 function scheduleSave() {
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(save, 600);
 }
 
+/** Move to the next/previous visible crop after flushing any pending save. */
 async function navigate(delta) {
   if (!(await flushSave())) return;
   const all = state.images;
@@ -386,6 +403,7 @@ async function navigate(delta) {
   await loadCurrent();
 }
 
+/** Discard the crop's boxes (marking it empty/ignored) and advance. */
 async function markEmpty() {
   const e = entry();
   if (!e) return;
@@ -401,6 +419,7 @@ async function markEmpty() {
   if (await save()) await navigate(1);
 }
 
+/** Toggle the "hide done" filter (persisted); the displayed crop stays put. */
 async function toggleFilter() {
   if (!(await flushSave())) return;
   state.skipDone = !state.skipDone;
@@ -419,15 +438,18 @@ async function toggleFilter() {
 
 // ---------------------------------------------------------------- editing
 
+/** Copy of the current boxes, suitable for the undo stack. */
 function snapshot() {
   return state.boxes.map((b) => ({ ...b }));
 }
 
+/** Push an undo snapshot, keeping at most 100. */
 function pushUndo() {
   state.undoStack.push(snapshot());
   if (state.undoStack.length > 100) state.undoStack.shift();
 }
 
+/** Restore the most recent undo snapshot and schedule a save. */
 function undo() {
   if (state.undoStack.length === 0) {
     setStatus("nothing to undo");
@@ -441,6 +463,7 @@ function undo() {
   render();
 }
 
+/** Delete box `i`, keeping the selection index consistent. */
 function deleteBox(i) {
   if (i < 0 || i >= state.boxes.length) return;
   pushUndo();
@@ -453,6 +476,7 @@ function deleteBox(i) {
   render();
 }
 
+/** Delete the selected box, if any. */
 function deleteSelected() {
   if (state.selected < 0) {
     setStatus("no box selected");
@@ -461,6 +485,7 @@ function deleteSelected() {
   deleteBox(state.selected);
 }
 
+/** Make the class bound to `key` current and apply it to the selected box. */
 function assignClassByShortcut(key) {
   if (!(key in state.shortcutMap)) {
     setStatus(`no class bound to "${key}"`, "error");
@@ -480,6 +505,7 @@ function assignClassByShortcut(key) {
   render();
 }
 
+/** Set the zoom level (clamped and persisted) and redraw. */
 function setZoom(z) {
   state.zoom = Math.min(24, Math.max(2, z));
   state.zoomInit = true;
@@ -488,6 +514,7 @@ function setZoom(z) {
   render();
 }
 
+/** Abort the in-progress mouse operation, or clear the selection. */
 function cancelOp() {
   if (!state.op) {
     state.selected = -1;
@@ -503,6 +530,7 @@ function cancelOp() {
 
 // ---------------------------------------------------------------- geometry
 
+/** The eight resize-handle positions (corners and edge midpoints) of box `b`. */
 function handlePoints(b) {
   const x1 = b.x, y1 = b.y, x2 = b.x + b.w, y2 = b.y + b.h;
   const xm = b.x + b.w / 2, ym = b.y + b.h / 2;
@@ -513,6 +541,7 @@ function handlePoints(b) {
   ];
 }
 
+/** Resize handle of the selected box at image point (px, py), or null. */
 function hitHandle(px, py) {
   if (state.selected < 0) return null;
   const r = 7 / state.zoom;
@@ -522,6 +551,7 @@ function hitHandle(px, py) {
   return null;
 }
 
+/** Topmost box at image point (px, py), or -1 when the point hits none. */
 function hitBox(px, py) {
   const g = 4 / state.zoom;
   for (let i = state.boxes.length - 1; i >= 0; i--) {
@@ -531,10 +561,12 @@ function hitBox(px, py) {
   return -1;
 }
 
+/** Clamp `v` to the range [lo, hi]. */
 function clamp(v, lo, hi) {
   return Math.min(hi, Math.max(lo, v));
 }
 
+/** Image-space coordinates of a mouse event over the canvas. */
 function pos(e) {
   const r = $("cv").getBoundingClientRect();
   return { x: (e.clientX - r.left) / state.zoom, y: (e.clientY - r.top) / state.zoom };
@@ -542,6 +574,7 @@ function pos(e) {
 
 // ---------------------------------------------------------------- mouse
 
+/** Start a resize, move, or draw operation from the mouse position. */
 function onMouseDown(e) {
   if (e.button !== 0 || !state.img) return;
   e.preventDefault();
@@ -577,6 +610,7 @@ function onMouseDown(e) {
   render();
 }
 
+/** Advance the in-progress draw/move/resize to the current mouse position. */
 function onMouseMove(e) {
   const op = state.op;
   if (!op || !state.img) return;
@@ -608,6 +642,7 @@ function onMouseMove(e) {
   render();
 }
 
+/** Finish the mouse operation, committing newly drawn or moved boxes. */
 function onMouseUp(e) {
   const op = state.op;
   state.op = null;
@@ -637,6 +672,7 @@ function onMouseUp(e) {
   render();
 }
 
+/** Right-click deletes the box under the cursor. */
 function onContext(e) {
   e.preventDefault();
   if (!state.img) return;
@@ -647,6 +683,7 @@ function onContext(e) {
 
 // ---------------------------------------------------------------- rendering
 
+/** Draw the image and its boxes (with class labels and handles) on the canvas. */
 function render() {
   const cv = $("cv");
   const ctx = cv.getContext("2d");
@@ -696,12 +733,14 @@ function render() {
   });
 }
 
+/** Update the status line with an optional style kind ("ok" or "error"). */
 function setStatus(msg, kind = "") {
   const el = $("status");
   el.textContent = msg;
   el.className = kind;
 }
 
+/** Build the class palette chips and their click-to-assign behaviour. */
 function buildPalette() {
   const pal = $("palette");
   pal.innerHTML = "";
@@ -727,6 +766,7 @@ function buildPalette() {
   });
 }
 
+/** Rebuild the side list of boxes with per-item select and delete actions. */
 function renderBoxList() {
   const ul = $("boxlist");
   ul.innerHTML = "";
@@ -758,6 +798,7 @@ function renderBoxList() {
     : "no boxes yet — drag on the image to draw one";
 }
 
+/** Refresh filename, progress, buttons, and zoom readout around the canvas. */
 function renderChrome() {
   const e = entry();
   const all = state.images;
@@ -782,6 +823,7 @@ function renderChrome() {
 
 // ---------------------------------------------------------------- keys
 
+/** Global keyboard shortcuts: save, undo, class keys, navigation, zoom. */
 window.addEventListener("keydown", (e) => {
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
@@ -862,6 +904,7 @@ $("btn-filter").onclick = toggleFilter;
 $("btn-zoom-in").onclick = () => setZoom(state.zoom + 1);
 $("btn-zoom-out").onclick = () => setZoom(state.zoom - 1);
 
+/** Warn before leaving the page with unsaved changes. */
 window.addEventListener("beforeunload", (e) => {
   if (state.dirty || state.saveTimer) {
     e.preventDefault();
