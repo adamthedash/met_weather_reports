@@ -300,8 +300,10 @@ def resolve_project(session: requests.Session, project: str) -> dict[str, Any]:
         return projects[0]
     if project.count("/") != 1 or not all(project.split("/")):
         raise ValueError(f"--project must be a project id or an owner/name slug, got {project!r}")
-    owner = project.split("/")[0]
-    for candidate in iter_resources(session, "/projects", "projects", {"owner": owner}):
+    # Filter by slug server-side and match client-side. An ?owner= lookup is not
+    # reliable: the login behind a slug's owner segment may differ from it (e.g.
+    # the slug met-rhonda/... belongs to the login met_rhonda).
+    for candidate in iter_resources(session, "/projects", "projects", {"slug": project}):
         if candidate.get("slug") == project:
             return candidate
     raise ValueError(f"no public project with slug {project!r}")
