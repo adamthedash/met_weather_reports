@@ -1,7 +1,8 @@
 /** Typed fetch helpers for the labeler JSON API. */
 
 import type {
-  BoxN, DecisionResult, Listing, PredBoxN, ReviewList,
+  AuditAction, AuditDecisionResult, AuditList, BoxN, CompareResult,
+  DecisionResult, Listing, PredBoxN, ReviewList,
 } from "./types";
 
 /** Shape every API error response has (see tools/labeler/app.py). */
@@ -75,5 +76,21 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, accept }),
+    }),
+
+  // -- audit stage ------------------------------------------------------
+  /** The audit queue: disagreeing crops + the compared count. */
+  auditList: () => fetchJSON<AuditList>("/api/audit/list"),
+  /** Both box sets and the disagreement reasons for one crop. */
+  auditCompare: (path: string) =>
+    fetchJSON<CompareResult>(
+      `/api/audit/compare?path=${encodeURIComponent(path)}`,
+    ),
+  /** Apply a keep-label / take-prediction / discard-both decision. */
+  auditDecision: (path: string, action: AuditAction) =>
+    fetchJSON<AuditDecisionResult>("/api/audit/decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, action }),
     }),
 };

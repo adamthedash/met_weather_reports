@@ -7,7 +7,8 @@
    * the editor owns only the in-progress gesture and reports committed edits
    * with their pre-mutation snapshot so the parent can drive undo/autosave.
    * In `readonly` mode (used by the review workspace) gestures are disabled
-   * and the canvas is display-only.
+   * and the canvas is display-only. Boxes with `source: "pred"` are stroked
+   * dashed so the audit workspace can overlay predictions on annotations.
    */
   import {
     clamp, handlePoints, hitBox, hitHandle, type Pt,
@@ -35,7 +36,7 @@
   }: {
     image: HTMLImageElement | null;
     boxes: Box[];
-    selected: number;
+    selected?: number;
     zoom: number;
     classes: string[];
     currentClass?: number | null;
@@ -230,7 +231,9 @@
       ctx.fillRect(x, y, w, h);
       ctx.lineWidth = sel ? 3 : 2;
       ctx.strokeStyle = color;
+      if (b.source === "pred") ctx.setLineDash([5, 4]);
       ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
 
       const name = classes[b.cls] ?? String(b.cls);
       const tag = b.conf !== undefined ? `${name} ${b.conf.toFixed(2)}` : name;

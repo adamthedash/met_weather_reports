@@ -17,6 +17,7 @@ from typing import TypedDict
 
 import yaml
 
+from tools.labeler.compare import compare_boxes
 from tools.labeler.errors import ApiError
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
@@ -112,8 +113,10 @@ class Dataset:
     """One dataset: crop images root, label files root, and class names.
 
     Label files mirror the images tree (``<stem>.txt`` in the same subdirs)
-    under ``labels_root``; prediction files (the bootstrap script's model
-    output) mirror it under ``predictions_root``. Semantics shared with the
+    under ``labels_root``; prediction files mirror it under two roots:
+    ``predictions_root`` (the bootstrap script's model output for unlabeled
+    crops) and ``audit_root`` (the audit script's model output for every
+    crop, compared against the labels). Semantics shared with the
     training pipeline:
 
     - label file exists (any content) → crop is done/annotated
@@ -124,6 +127,7 @@ class Dataset:
     images_root: Path
     labels_root: Path
     predictions_root: Path
+    audit_root: Path
     classes: tuple[str, ...]
 
     def image_path(self, rel: str) -> Path:
@@ -261,22 +265,64 @@ class Dataset:
             self.predictions_root, (p.parent / (p.stem + ".txt")).as_posix()
         )
 
+    def audit_prediction_path_for(self, rel: str) -> Path:
+        """Audit-root mirror of a crop path: <stem>.txt in the same subdirs.
+
+        Same contract as ``scripts/audit_annotations.py:prediction_path_for``.
+
+        Raises:
+            ApiError: If `rel` escapes the audit root.
+        """
+        p = Path(rel)
+        return safe_path(
+            self.audit_root, (p.parent / (p.stem + ".txt")).as_posix()
+        )
+
     def read_prediction(self, rel: str) -> list[PredBox]:
         """Read the prediction file mirroring `rel`; empty for a predicted background.
 
         Lines hold six fields (``cls cx cy w h conf``, normalised 0-1) as
-        written by ``scripts/bootstrap_annotations.py:write_prediction``.
-        Parsing is strict: a malformed line is reported, never skipped, so
-        corruption can not slip into the dataset as a label. Prediction files
-        are therefore intentionally not loadable as YOLO labels; only accepted
-        files under ``labels_root`` are.
+        written by ``scripts/bootstrap_annotations.py:write_prediction``;
+        parsing is strict (see :meth:`read_prediction_file`). Prediction
+        files are therefore intentionally not loadable as YOLO labels; only
+        accepted files under ``labels_root`` are.
 
         Raises:
-            ApiError: If the prediction is missing, a line has the wrong field
+            ApiError: If the prediction is missing or malformed.
+        """
+        return self.read_prediction_file(rel, self.prediction_path_for(rel))
+
+    def read_audit_prediction(self, rel: str) -> list[PredBox]:
+        """Read the audit prediction file mirroring `rel`; empty for a predicted background.
+
+        Same format and strictness as :meth:`read_prediction`, read from the
+        audit tree written by ``scripts/audit_annotations.py``.
+
+        Raises:
+            ApiError: If the audit prediction is missing or malformed.
+        """
+        return self.read_prediction_file(rel, self.audit_prediction_path_for(rel))
+
+    def read_prediction_file(self, rel: str, path: Path) -> list[PredBox]:
+        """Strictly parse one six-column prediction file.
+
+        Each line is ``cls cx cy w h conf`` in normalised 0-1 coordinates.
+        Parsing is strict: a malformed line is reported, never skipped, so
+        corruption can not slip into the dataset as a label.
+
+        Args:
+            rel: Crop path the file mirrors; used in error messages.
+            path: The prediction file to parse.
+
+        Returns:
+            The predicted boxes in file order; empty for a predicted
+            background crop.
+
+        Raises:
+            ApiError: If the file is missing, a line has the wrong field
                 count or non-numeric fields, a class id is out of range, or a
                 value is non-finite or outside 0-1.
         """
-        path = self.prediction_path_for(rel)
         if not path.is_file():
             raise ApiError(404, f"no such prediction: {rel}")
         boxes: list[PredBox] = []
@@ -362,3 +408,69 @@ class Dataset:
         }
         queued_stems = {Path(rel).with_suffix("").as_posix() for rel in queued}
         return queue, len(on_disk - queued_stems)
+
+    def audit_queue(self) -> tuple[list[dict[str, object]], int]:
+        """Return the audit queue and the number of compared crops.
+
+        The queue holds every crop that has both a label file and an audit
+        prediction file and whose two box sets disagree per
+        :func:`tools.labeler.compare.compare_boxes`, in natural order. Crops
+        whose sets agree are compared but not queued; crops missing either
+        file are not compared at all (decided, or not covered by the last
+        ``scripts/audit_annotations.py`` run).
+
+        Each entry is ``{"path", "label_boxes", "pred_boxes", "issues",
+        "error"}``: `label_boxes` / `pred_boxes` count the boxes of each side
+        (None for a malformed file — the side that failed is the one with the
+        None count), `issues` counts the disagreements (None when a side is
+        malformed), and `error` carries the parse message of a malformed file
+        (None otherwise). A malformed file queues with its error so the user
+        must resolve it; the audit stage's actions refuse the broken side.
+
+        Returns:
+            The ``(queue, compared)`` pair: the crops to review and the
+            number of crops holding both a label and an audit prediction.
+        """
+        queue: list[dict[str, object]] = []
+        compared = 0
+        for rel in self.list_images():
+            if not self.label_path_for(rel).is_file():
+                continue  # not annotated: nothing to compare against
+            if not self.audit_prediction_path_for(rel).is_file():
+                continue  # decided this round, or never predicted
+            compared += 1
+            labels: list[Box] | None
+            preds: list[PredBox] | None
+            errors: list[str] = []
+            try:
+                labels = self.read_labels(rel)
+            except ApiError as exc:
+                labels = None
+                errors.append(exc.message)
+            try:
+                preds = self.read_audit_prediction(rel)
+            except ApiError as exc:
+                preds = None
+                errors.append(exc.message)
+            entry: dict[str, object]
+            if labels is not None and preds is not None:
+                issues = compare_boxes(labels, preds)
+                if not issues:
+                    continue  # model and label agree
+                entry = {
+                    "path": rel,
+                    "label_boxes": len(labels),
+                    "pred_boxes": len(preds),
+                    "issues": len(issues),
+                    "error": None,
+                }
+            else:
+                entry = {
+                    "path": rel,
+                    "label_boxes": len(labels) if labels is not None else None,
+                    "pred_boxes": len(preds) if preds is not None else None,
+                    "issues": None,
+                    "error": "; ".join(errors),
+                }
+            queue.append(entry)
+        return queue, compared

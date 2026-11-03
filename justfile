@@ -10,6 +10,9 @@ prep_dataset:
 bootstrap model conf="0.25":
     pixi run python scripts/bootstrap_annotations.py --model {{model}} --conf {{conf}}
 
+audit model conf="0.25":
+    pixi run python scripts/audit_annotations.py --model {{model}} --conf {{conf}}
+
 # combined labeler tool (tools/labeler): build the frontend and serve
 labeler: labeler-build
     pixi run python -m tools.labeler

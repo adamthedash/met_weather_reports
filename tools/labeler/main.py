@@ -9,6 +9,7 @@ import uvicorn
 
 from tools.labeler.app import create_app
 from tools.labeler.config import (
+    DEFAULT_AUDIT_PREDICTIONS_ROOT,
     DEFAULT_DATA_YAML,
     DEFAULT_IMAGES_ROOT,
     DEFAULT_LABELS_ROOT,
@@ -42,6 +43,12 @@ def main() -> None:
         help="root of the prediction files to review (mirrors the images tree)",
     )
     ap.add_argument(
+        "--audit-predictions",
+        type=Path,
+        default=DEFAULT_AUDIT_PREDICTIONS_ROOT,
+        help="root of the audit prediction files (mirrors the images tree)",
+    )
+    ap.add_argument(
         "--data-yaml",
         type=Path,
         default=DEFAULT_DATA_YAML,
@@ -64,6 +71,7 @@ def main() -> None:
         images_root=args.images,
         labels_root=args.labels,
         predictions_root=args.predictions,
+        audit_predictions_root=args.audit_predictions,
         data_yaml=args.data_yaml,
     )
     # strict by design: a missing images root or bad data.yaml aborts startup
@@ -77,6 +85,7 @@ def main() -> None:
     rels = ds.list_images()
     done = sum(1 for rel in rels if ds.label_path_for(rel).is_file())
     queue, stale = ds.queue_and_stale()
+    disagreements, compared = ds.audit_queue()
     dist_built = (cfg.dist / "index.html").is_file()
     print(f"labeler server: http://{cfg.host}:{cfg.port}")
     print(f"  images : {len(rels)} crops under {ds.images_root}")
@@ -87,6 +96,7 @@ def main() -> None:
         f"  queue  : {len(queue)} predictions to review"
         + (f" ({stale} stale)" if stale else "")
     )
+    print(f"  audit  : {len(disagreements)} disagreements of {compared} compared")
     print(f"  stages : {', '.join(s.id for s in app.state.stages)}")
     print(
         f"  dist   : {cfg.dist} "

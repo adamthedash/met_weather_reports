@@ -13,6 +13,7 @@ FRONTEND_DIST = PACKAGE_ROOT / "frontend" / "dist"
 DEFAULT_IMAGES_ROOT = REPO_ROOT / "datasets" / "digits" / "images"
 DEFAULT_LABELS_ROOT = REPO_ROOT / "datasets" / "digits" / "labels"
 DEFAULT_PREDICTIONS_ROOT = REPO_ROOT / "datasets" / "digits" / "predictions"
+DEFAULT_AUDIT_PREDICTIONS_ROOT = REPO_ROOT / "datasets" / "digits" / "audit_predictions"
 DEFAULT_DATA_YAML = REPO_ROOT / "datasets" / "digits" / "data.yaml"
 
 
@@ -26,6 +27,7 @@ class Config:
     images_root: Path = DEFAULT_IMAGES_ROOT
     labels_root: Path = DEFAULT_LABELS_ROOT
     predictions_root: Path = DEFAULT_PREDICTIONS_ROOT
+    audit_predictions_root: Path = DEFAULT_AUDIT_PREDICTIONS_ROOT
     data_yaml: Path = DEFAULT_DATA_YAML
 
     def dataset(self) -> Dataset:
@@ -46,5 +48,6 @@ class Config:
             images_root=images_root,
             labels_root=self.labels_root.resolve(),
             predictions_root=self.predictions_root.resolve(),
+            audit_root=self.audit_predictions_root.resolve(),
             classes=tuple(load_classes(self.data_yaml)),
         )

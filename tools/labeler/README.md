@@ -1,8 +1,9 @@
 # labeler — combined, extensible annotation tool
 
 One application for the dataset's annotation workflows: manual bounding-box
-labeling (**annotate**) and accept/reject review of bootstrap predictions
-(**review**). It is structured as a registry of pluggable workflow **stages**
+labeling (**annotate**), accept/reject review of bootstrap predictions
+(**review**), and model-vs-label disagreement resolution (**audit**). It is
+structured as a registry of pluggable workflow **stages**
 so new pipeline stages (triage, spot-check, merge, correction rounds) can be
 added later without touching the shared engine.
 
@@ -18,7 +19,8 @@ just labeler        # pnpm install + vite build, then serve on http://127.0.0.1:
 ```
 
 Open the URL in a browser (forward the port first when working over SSH).
-The top bar switches between the stages (`/annotate`, `/review` deep links).
+The top bar switches between the stages (`/annotate`, `/review`, `/audit`
+deep links).
 `Ctrl+C` stops the server.
 
 Development, in two terminals:
@@ -35,6 +37,7 @@ CLI flags (all optional):
 | `--images` | `datasets/digits/images` | root directory of crop images |
 | `--labels` | `datasets/digits/labels` | output root for YOLO label files (mirrors the images tree) |
 | `--predictions` | `datasets/digits/predictions` | prediction files to review (mirrors the images tree) |
+| `--audit-predictions` | `datasets/digits/audit_predictions` | audit model output to compare against labels (mirrors the images tree) |
 | `--data-yaml` | `datasets/digits/data.yaml` | class names (file must exist and parse) |
 | `--host` | `127.0.0.1` | bind address |
 | `--port` | `8125` | port |
@@ -47,7 +50,8 @@ datasets/digits/
 ├── data.yaml                              # classes: 0-9, dash, dot
 ├── images/<source-id>/<r>_<c>.png         # one crop per table cell
 ├── labels/<source-id>/<r>_<c>.txt         # YOLO labels (5 columns)
-└── predictions/<source-id>/<r>_<c>.txt    # bootstrap model output (6 columns)
+├── predictions/<source-id>/<r>_<c>.txt    # bootstrap model output (6 columns)
+└── audit_predictions/<source-id>/<r>_<c>.txt  # audit model output (6 columns)
 ```
 
 A label file holds one line per character box, normalised to 0-1 at 6 decimals:
@@ -57,7 +61,8 @@ A label file holds one line per character box, normalised to 0-1 at 6 decimals:
 ```
 
 A prediction file adds a confidence column (written by
-`scripts/bootstrap_annotations.py`, consumed and deleted by review):
+`scripts/bootstrap_annotations.py` or `scripts/audit_annotations.py`,
+consumed and deleted by the review and audit stages):
 
 ```
 <class> <cx> <cy> <w> <h> <conf>
@@ -77,6 +82,9 @@ treats them identically):
 - **prediction file + no label file** → in the review queue
 - **prediction file for an annotated or missing crop** → stale: ignored by the
   queue, pruned by the next bootstrap run
+- **audit prediction file + label file** → compared by the audit stage and
+  queued when the two box sets disagree; the file is deleted when the crop is
+  decided
 
 New source pages need no setup: any directory tree of images placed under the
 images root is picked up on the next load, with labels and predictions mirrored
@@ -147,6 +155,39 @@ rejected and fixed in the annotate stage.
 - Decided crops never return to the queue; stale prediction files are counted
   in the header and ignored.
 
+### audit (`/audit`)
+
+Find incorrect labels by comparing them against a model's predictions: run
+`just audit <model>` (`scripts/audit_annotations.py`) over the dataset, then
+resolve every disagreement here. The crop renders twice side by side —
+annotations on the left, model predictions on the right, each badged with
+its side (an empty side shows "(EMPTY)") — with the prediction confidences
+and a plain-words issue list in the sidebar. One keystroke per crop:
+
+| Key | Action |
+|---|---|
+| `l` | keep the existing label: prediction dropped, label untouched |
+| `p` | take the model's prediction: label overwritten (empty prediction → marked empty/ignored) |
+| `x` | discard both: label and prediction deleted, the crop returns to the annotate queue |
+| `←` `→` / `a` `d` | previous / next (no decision) |
+
+- A crop is queued when its label and its audit prediction disagree: a box
+  missing on either side, a matched pair with different classes, or a
+  matched pair overlapping less than `MIN_IOU` (0.5, greedy pairing by
+  descending IoU). Pure position/size differences above that overlap do not
+  flag a crop. Empty label + empty prediction is agreement (background
+  confirmed).
+- Every decision consumes the crop's audit prediction file and is destructive
+  and immediate — there is no undo. The label is written before the
+  prediction is deleted, so an interrupted *take* leaves a still-comparing
+  snapshot; a wrongly discarded label is re-annotated in the annotate stage.
+- One `just audit <model>` run is one review round: re-running the script
+  re-flags every crop that still disagrees, including crops whose labels you
+  already kept.
+- A malformed file queues with its parse error and can only be resolved from
+  its sound side: a malformed prediction can never be taken, a malformed
+  label can never be kept; *discard both* is always available.
+
 ## API contract
 
 Errors are always JSON `{"error": ...}` (400/404/413/500) and every response
@@ -179,6 +220,14 @@ Review stage (mounted at `/api/review`):
 | `GET /api/review/prediction?path=` | `{"path", "boxes": [{cls, cx, cy, w, h, conf}]}` (normalised) |
 | `POST /api/review/decision` | `{"path", "accept": true\|false}` → `{"ok", "accepted", "saved", "already_annotated", "remaining"}` |
 
+Audit stage (mounted at `/api/audit`):
+
+| Route | Returns |
+|---|---|
+| `GET /api/audit/list` | `{"audits": [{path, label_boxes, pred_boxes, issues, error}], "total", "remaining"}` — `total` counts every compared crop; a side's box count is `null` for a malformed file |
+| `GET /api/audit/compare?path=` | `{"path", "labels", "predictions", "issues"}` — both box sets (normalised, predictions carry `conf`) and the disagreements `[{kind, label, pred, iou}]` |
+| `POST /api/audit/decision` | `{"path", "action": "keep_label"\|"take_prediction"\|"discard_both"}` → `{"ok", "action", "saved", "remaining"}` |
+
 On-disk parsing is strict: malformed label or prediction lines are reported
 (400), never silently skipped or promoted into the dataset.
 
@@ -190,11 +239,13 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/main.py` | CLI flags, startup summary, uvicorn bootstrap |
 | `tools/labeler/config.py` | `Config`: bind address, dist, dataset roots |
 | `tools/labeler/dataset.py` | `Dataset` + helpers: classes, image listing, label/prediction I/O |
+| `tools/labeler/compare.py` | model-vs-label comparison: greedy IoU pairing + disagreement issues |
 | `tools/labeler/errors.py` | `ApiError` (HTTP error with a JSON-safe message) |
 | `tools/labeler/web.py` | request helpers shared by the stage routers |
 | `tools/labeler/stages/base.py` | stage seam: `Stage` contract + `summaries` |
 | `tools/labeler/stages/annotate.py` | annotate stage: queue listing + label I/O |
 | `tools/labeler/stages/review.py` | review stage: prediction queue + accept/reject decisions |
+| `tools/labeler/stages/audit.py` | audit stage: disagreement queue + keep/take/discard decisions |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
 | `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
 | `tools/labeler/frontend/src/lib/` | geometry, palette, typed API client |
@@ -224,9 +275,12 @@ engine and core routes stay untouched.
   SSH tunnel; do not expose the port.
 - **Axis-aligned boxes only** — YOLO format has no rotation.
 - **Single selection** in the annotate editor; crops hold only a few boxes.
-- **Review decisions are irreversible** by design (cheap to regenerate or
-  re-annotate instead of undo).
+- **Review and audit decisions are irreversible** by design (cheap to
+  regenerate or re-annotate instead of undo).
 - **`predictions/` is owned by `scripts/bootstrap_annotations.py`** — review
   only deletes files it decides; regeneration and pruning stay in the script.
+- **`audit_predictions/` is owned by `scripts/audit_annotations.py`** — the
+  audit stage only deletes files it decides; regeneration and pruning stay in
+  the script, and one run is one review round.
 - **Class set is data-driven** — editing `data.yaml` names changes the palette
   and keyboard map on the next load; ids must stay contiguous from 0.

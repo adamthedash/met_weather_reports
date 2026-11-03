@@ -6,9 +6,11 @@
 import type { Component } from "svelte";
 
 import AnnotateWorkspace from "./AnnotateWorkspace.svelte";
+import AuditWorkspace from "./AuditWorkspace.svelte";
 import ReviewWorkspace from "./ReviewWorkspace.svelte";
 
 export const workspaces: Record<string, Component> = {
   annotate: AnnotateWorkspace,
   review: ReviewWorkspace,
+  audit: AuditWorkspace,
 };
