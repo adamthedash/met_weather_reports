@@ -6,11 +6,12 @@ Usage:
     pixi run python scripts/scrape_zooniverse.py --project owner/name --out data/raw
 
 For every subject of the given public Zooniverse (Panoptes) project the image
-files are downloaded to ``<out>/<subject_id>.<ext>`` -- flat, one page per file,
-named by the Zooniverse subject id, the layout and unique stems expected by
-``data/raw`` (see ``scripts/preprocess_pages.py``). A subject with several
-images yields ``<subject_id>.<ext>``, ``<subject_id>_2.<ext>``, ... in location
-order. Subject-set and workflow membership is not encoded in the paths (a
+files are downloaded to ``<out>/images/<subject_id>.<ext>`` -- one page per
+file, named by the Zooniverse subject id, the unique stems expected by
+``data/raw`` (see ``scripts/preprocess_pages.py``, whose recursive scan picks
+up the ``images/`` folder). A subject with several images yields
+``<subject_id>.<ext>``, ``<subject_id>_2.<ext>``, ... in location order.
+Subject-set and workflow membership is not encoded in the paths (a
 subject belongs to one or more subject sets and to no workflow); it is recorded
 in the metadata instead.
 
@@ -36,10 +37,13 @@ summary on stdout is not affected.
 
 The pipeline only reads the project anonymously and writes only under ``--out``;
 nothing is written into ``datasets/``. Note that ``scripts/preprocess_pages.py``
-fails on duplicate stems: re-scraping subjects that already sit in ``data/raw``
-under their old storage names (e.g. ``210736fe-....jpeg``) duplicates those
-pages as distinct files -- scrape into a clean folder or prune the old copies
-first.
+fails on duplicate stems, and existing files are never modified or moved:
+re-scraping into a folder that already holds images under their old storage
+names at the root (e.g. ``210736fe-....jpeg``) or under the pre-``images/``
+layout (e.g. ``<out>/<id>.jpeg``) downloads fresh copies into ``images/`` while
+the old ones stay put -- the recursive scan then sees two pages per stem. Move
+the old files into ``images/`` first (or prune them, or scrape into a clean
+folder).
 """
 
 from __future__ import annotations
@@ -68,6 +72,7 @@ MIME_EXTS = {
     "image/webp": ".webp",
     "image/bmp": ".bmp",
 }
+IMAGES_DIRNAME = "images"
 PAGE_SIZE = 100
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (2.0, 4.0, 8.0)
@@ -480,7 +485,7 @@ def subject_files(subject: dict[str, Any]) -> list[Location]:
 
 
 def saved_filename(subject_id: str, location: Location) -> str:
-    """Build the output filename of one subject media location.
+    """Build the filename (within ``<out>/images/``) of one subject media location.
 
     Args:
         subject_id: The subject's id as a string.
@@ -608,7 +613,7 @@ def download_file(session: requests.Session, url: str, dest: Path) -> None:
 def process_subject(
     session: requests.Session, out_dir: Path, project_id: str, subject: dict[str, Any]
 ) -> SubjectOutcome:
-    """Download the missing images of one subject and refresh its metadata.
+    """Download the missing ``<out>/images/`` files of one subject and refresh its metadata.
 
     The subject is skipped untouched (and logged at DEBUG) when its metadata
     file and every target image already exist non-empty; otherwise only
@@ -633,7 +638,7 @@ def process_subject(
     """
     subject_id = resource_id(subject, "subject")
     targets = [
-        (location, out_dir / saved_filename(subject_id, location))
+        (location, out_dir / IMAGES_DIRNAME / saved_filename(subject_id, location))
         for location in subject_files(subject)
     ]
     if metadata_path(out_dir, subject_id).exists() and all(
@@ -656,7 +661,7 @@ def process_subject(
             "project_id": project_id,
             "files": [
                 {
-                    "file": dest.name,
+                    "file": str(dest.relative_to(out_dir)),
                     "location_index": location.index,
                     "url": location.url,
                     "mime": location.mime,

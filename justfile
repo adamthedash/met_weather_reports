@@ -3,7 +3,7 @@ marimo:
 
 # scrape subject images + metadata from a public Zooniverse project
 scrape:
-    pixi run python scripts/scrape_zooniverse.py --project met-rhonda/irish-weather-rescue --out download --limit 5
+    pixi run python scripts/scrape_zooniverse.py --project met-rhonda/irish-weather-rescue --out download --limit 100
 
 preprocess:
     pixi run python scripts/preprocess_pages.py
