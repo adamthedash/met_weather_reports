@@ -28,6 +28,12 @@ run exit non-zero; the run itself continues past them. Project resolution and
 listing failures abort the run instead; anything already downloaded stays on
 disk.
 
+Run activity is logged to stderr and appended to ``<out>/scrape.log``: every
+API call and image download attempt (with retries), per-subject decisions and
+failures, listing totals and a progress line every 100 subjects. ``--log-level``
+narrows the verbosity (``DEBUG``, the default, shows everything); the run
+summary on stdout is not affected.
+
 The pipeline only reads the project anonymously and writes only under ``--out``;
 nothing is written into ``datasets/``. Note that ``scripts/preprocess_pages.py``
 fails on duplicate stems: re-scraping subjects that already sit in ``data/raw``
@@ -40,7 +46,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +73,12 @@ MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (2.0, 4.0, 8.0)
 REQUEST_TIMEOUT = 30.0
 CHUNK_SIZE = 1 << 16
+PROGRESS_EVERY = 100
+LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+PROGRESS_FORMAT = "progress: %d subjects / %d downloaded (%d files) / %d skipped / %d failed"
+
+logger = logging.getLogger(__name__)
 
 
 class Location(NamedTuple):
@@ -81,6 +95,39 @@ class SubjectOutcome(NamedTuple):
 
     n_new_files: int
     skipped: bool
+
+
+# ---------------------------------------------------------------------------
+# logging
+
+
+def setup_logging(level_name: str, log_file: Path) -> None:
+    """Configure run logging: stderr plus an appended ``log_file``.
+
+    Both handlers receive identical records with UTC timestamps; the log file
+    is appended to, so resume runs extend the same trail. The ``urllib3`` and
+    ``requests`` loggers are quieted to WARNING -- every request is already
+    logged by ``request_with_retries``.
+
+    Args:
+        level_name: Logging level name (``DEBUG``..``CRITICAL``). ``DEBUG``,
+            the ``--log-level`` default, logs everything including every API
+            call.
+        log_file: Log file to append to; the parent directory is created as
+            needed.
+    """
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
+    formatter.converter = time.gmtime
+    root = logging.getLogger()
+    root.setLevel(level_name)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+    for handler in (stderr_handler, file_handler):
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +162,9 @@ def request_with_retries(
 
     Connection errors, HTTP 5xx and HTTP 429 are retried up to ``MAX_ATTEMPTS``
     times on the ``BACKOFF_SECONDS`` schedule; a 429 ``Retry-After`` header
-    overrides the scheduled delay. Other 4xx responses fail immediately.
+    overrides the scheduled delay. Other 4xx responses fail immediately. Every
+    request attempt is logged at DEBUG (URL, params, status or error, elapsed
+    time) and every retry at WARNING.
 
     Args:
         session: Session carrying the API headers.
@@ -131,19 +180,46 @@ def request_with_retries(
             attempt, or fails with a non-transient HTTP status.
     """
     for attempt in range(MAX_ATTEMPTS):
+        query = f" {params}" if params else ""
+        started = time.monotonic()
         try:
             response = session.get(url, params=params, stream=stream, timeout=REQUEST_TIMEOUT)
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            logger.debug("GET %s%s -> %s in %.2fs", url, query, exc, time.monotonic() - started)
             if attempt == MAX_ATTEMPTS - 1:
                 raise
-            time.sleep(BACKOFF_SECONDS[attempt])
+            delay = BACKOFF_SECONDS[attempt]
+            logger.warning(
+                "GET %s failed (attempt %d/%d): %s; retrying in %.1fs",
+                url,
+                attempt + 1,
+                MAX_ATTEMPTS,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
             continue
+        logger.debug(
+            "GET %s%s -> %s in %.2fs",
+            url,
+            query,
+            response.status_code,
+            time.monotonic() - started,
+        )
         status = response.status_code
         if status == 429 or status >= 500:
             delay = retry_after_seconds(response) or BACKOFF_SECONDS[attempt]
             if attempt == MAX_ATTEMPTS - 1:
                 response.raise_for_status()
             response.close()
+            logger.warning(
+                "GET %s failed (attempt %d/%d): HTTP %d; retrying in %.1fs",
+                url,
+                attempt + 1,
+                MAX_ATTEMPTS,
+                status,
+                delay,
+            )
             time.sleep(delay)
             continue
         if not response.ok:
@@ -183,11 +259,35 @@ def api_get(
     return payload
 
 
-def next_page(payload: dict[str, Any], resource_key: str, path: str) -> int | None:
-    """Return the next page number of a listing, or ``None`` on the last page.
+def pagination_meta(payload: dict[str, Any], resource_key: str, path: str) -> dict[str, Any]:
+    """Return the pagination block of one listing page's ``meta``.
 
     Panoptes pages list responses via a ``meta`` block, either directly or
-    nested under the resource key; both documented shapes are accepted.
+    nested under the resource key; both documented shapes are accepted. The
+    block carries the page numbers plus ``count``/``page_count``.
+
+    Args:
+        payload: Decoded body of one listing page.
+        resource_key: Top-level JSON key holding the resource array.
+        path: API path of the listing, for error messages.
+
+    Returns:
+        The pagination block as a dict.
+
+    Raises:
+        ValueError: If the page has no usable pagination block.
+    """
+    meta = payload.get("meta")
+    block = meta.get(resource_key) if isinstance(meta, dict) else None
+    if not isinstance(block, dict):
+        block = meta if isinstance(meta, dict) else None
+    if not isinstance(block, dict):
+        raise ValueError(f"API response for {path} has no pagination meta")
+    return block
+
+
+def next_page(payload: dict[str, Any], resource_key: str, path: str) -> int | None:
+    """Return the next page number of a listing, or ``None`` on the last page.
 
     Args:
         payload: Decoded body of one listing page.
@@ -201,13 +301,7 @@ def next_page(payload: dict[str, Any], resource_key: str, path: str) -> int | No
         ValueError: If the page has no usable pagination block or its
             ``next_page`` is not a number.
     """
-    meta = payload.get("meta")
-    block = meta.get(resource_key) if isinstance(meta, dict) else None
-    if not isinstance(block, dict):
-        block = meta if isinstance(meta, dict) else None
-    if not isinstance(block, dict):
-        raise ValueError(f"API response for {path} has no pagination meta")
-    raw = block.get("next_page")
+    raw = pagination_meta(payload, resource_key, path).get("next_page")
     if raw is None:
         return None
     try:
@@ -232,7 +326,8 @@ def iter_resources(
         params: Optional query parameters; ``page``/``page_size`` are added.
 
     Yields:
-        Each resource of the listing as a dict.
+        Each resource of the listing as a dict. The listing's ``count`` and
+        ``page_count`` are logged at INFO after the first page.
 
     Raises:
         ValueError: If a page has no ``<resource_key>`` array, holds a
@@ -244,6 +339,9 @@ def iter_resources(
         payload = api_get(
             session, path, {**(params or {}), "page": page, "page_size": PAGE_SIZE}
         )
+        if page == 1:
+            block = pagination_meta(payload, resource_key, path)
+            logger.info("%s: %s resources in %s pages", path, block.get("count"), block.get("page_count"))
         resources = payload.get(resource_key)
         if not isinstance(resources, list):
             raise ValueError(f"API response for {path} has no {resource_key!r} array")
@@ -284,7 +382,8 @@ def resolve_project(session: requests.Session, project: str) -> dict[str, Any]:
         project: Numeric project id, or an ``owner/name`` project slug.
 
     Returns:
-        The project resource as returned by the API.
+        The project resource as returned by the API. The resolved id, display
+        name and slug are logged at INFO.
 
     Raises:
         ValueError: If ``project`` is neither an id nor a slug, the project
@@ -297,16 +396,28 @@ def resolve_project(session: requests.Session, project: str) -> dict[str, Any]:
         projects = payload.get("projects")
         if not isinstance(projects, list) or len(projects) != 1:
             raise ValueError(f"project id {project} not found")
-        return projects[0]
-    if project.count("/") != 1 or not all(project.split("/")):
-        raise ValueError(f"--project must be a project id or an owner/name slug, got {project!r}")
-    # Filter by slug server-side and match client-side. An ?owner= lookup is not
-    # reliable: the login behind a slug's owner segment may differ from it (e.g.
-    # the slug met-rhonda/... belongs to the login met_rhonda).
-    for candidate in iter_resources(session, "/projects", "projects", {"slug": project}):
-        if candidate.get("slug") == project:
-            return candidate
-    raise ValueError(f"no public project with slug {project!r}")
+        resolved = projects[0]
+    else:
+        if project.count("/") != 1 or not all(project.split("/")):
+            raise ValueError(
+                f"--project must be a project id or an owner/name slug, got {project!r}"
+            )
+        # Filter by slug server-side and match client-side. An ?owner= lookup is not
+        # reliable: the login behind a slug's owner segment may differ from it (e.g.
+        # the slug met-rhonda/... belongs to the login met_rhonda).
+        for candidate in iter_resources(session, "/projects", "projects", {"slug": project}):
+            if candidate.get("slug") == project:
+                resolved = candidate
+                break
+        else:
+            raise ValueError(f"no public project with slug {project!r}")
+    logger.info(
+        "project %s (%s, slug %s) resolved",
+        resource_id(resolved, "project"),
+        resolved.get("display_name"),
+        resolved.get("slug"),
+    )
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +549,7 @@ def download_file(session: requests.Session, url: str, dest: Path) -> None:
     attempt. Transient failures of the whole request -- connection, status and
     body streaming -- are retried up to ``MAX_ATTEMPTS`` times on the
     ``BACKOFF_SECONDS`` schedule; non-transient HTTP errors and invalid bodies
-    are not.
+    are not. Every download is logged at DEBUG and every retry at WARNING.
 
     Args:
         session: Session carrying the API headers.
@@ -464,9 +575,11 @@ def download_file(session: requests.Session, url: str, dest: Path) -> None:
                         fh.write(chunk)
             finally:
                 response.close()
-            if tmp.stat().st_size == 0:
+            size = tmp.stat().st_size
+            if size == 0:
                 raise ValueError(f"empty response body: {url}")
             os.replace(tmp, dest)
+            logger.debug("downloaded %s -> %s (%d bytes)", url, dest.name, size)
             return
         except requests.RequestException as exc:
             status = exc.response.status_code if exc.response is not None else None
@@ -474,7 +587,16 @@ def download_file(session: requests.Session, url: str, dest: Path) -> None:
                 raise  # non-transient 4xx: not worth retrying
             if attempt == MAX_ATTEMPTS - 1:
                 raise
-            time.sleep(BACKOFF_SECONDS[attempt])
+            delay = BACKOFF_SECONDS[attempt]
+            logger.warning(
+                "download of %s interrupted (attempt %d/%d): %s; retrying in %.1fs",
+                url,
+                attempt + 1,
+                MAX_ATTEMPTS,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
         finally:
             tmp.unlink(missing_ok=True)
 
@@ -488,10 +610,10 @@ def process_subject(
 ) -> SubjectOutcome:
     """Download the missing images of one subject and refresh its metadata.
 
-    The subject is skipped untouched when its metadata file and every target
-    image already exist non-empty; otherwise only missing images are fetched
-    (existing files are never modified or deleted) and the metadata file is
-    written from the listing data.
+    The subject is skipped untouched (and logged at DEBUG) when its metadata
+    file and every target image already exist non-empty; otherwise only
+    missing images are fetched (existing files are never modified or deleted)
+    and the metadata file is written from the listing data.
 
     Args:
         session: Session carrying the API headers.
@@ -517,6 +639,7 @@ def process_subject(
     if metadata_path(out_dir, subject_id).exists() and all(
         is_nonempty(dest) for _, dest in targets
     ):
+        logger.debug("subject %s already complete; skipping", subject_id)
         return SubjectOutcome(n_new_files=0, skipped=True)
 
     n_new_files = 0
@@ -570,16 +693,29 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="stop after N listed subjects (default: no limit)",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="DEBUG",
+        help="logging verbosity; DEBUG (the default) logs every API call and download",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Download every subject of ``--project`` into ``--out`` and print the run summary."""
+    """Download every subject of ``--project`` into ``--out`` and print the run summary.
+
+    Logging is configured first from ``--log-level`` (stderr plus the appended
+    ``<out>/scrape.log``); the run summary still goes to stdout.
+    """
     args = parse_args()
-    if args.limit is not None and args.limit < 1:
-        raise SystemExit(f"--limit must be a positive integer, got {args.limit}")
     out_dir: Path = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(args.log_level, out_dir / "scrape.log")
+    if args.limit is not None and args.limit < 1:
+        logger.error("--limit must be a positive integer, got %s", args.limit)
+        raise SystemExit(f"--limit must be a positive integer, got {args.limit}")
 
     session = requests.Session()
     session.headers.update(API_HEADERS)
@@ -599,6 +735,7 @@ def main() -> None:
         )
         write_json(subject_sets, out_dir / "metadata" / "subject_sets.json")
     except (ValueError, requests.RequestException, OSError) as exc:
+        logger.error("cannot load project %r: %s", args.project, exc)
         raise SystemExit(f"cannot load project {args.project!r}: {exc}") from exc
 
     seen = downloaded = skipped = n_files = 0
@@ -612,6 +749,7 @@ def main() -> None:
             try:
                 outcome = process_subject(session, out_dir, project_id, subject)
             except (ValueError, requests.RequestException, OSError) as exc:
+                logger.warning("subject %s failed: %s", label, exc)
                 failed.append((label, str(exc)))
             else:
                 if outcome.skipped:
@@ -619,15 +757,24 @@ def main() -> None:
                 else:
                     downloaded += 1
                     n_files += outcome.n_new_files
+            if seen % PROGRESS_EVERY == 0:
+                logger.info(
+                    PROGRESS_FORMAT, seen, downloaded, n_files, skipped, len(failed)
+                )
             if args.limit is not None and seen >= args.limit:
                 break
     except (ValueError, requests.RequestException) as exc:
+        logger.error("cannot list subjects of project %s: %s", project_id, exc)
         raise SystemExit(f"cannot list subjects of project {project_id}: {exc}") from exc
 
-    print(
+    if seen % PROGRESS_EVERY != 0:
+        logger.info(PROGRESS_FORMAT, seen, downloaded, n_files, skipped, len(failed))
+    summary = (
         f"{seen} subjects seen / {downloaded} downloaded ({n_files} files) / "
         f"{skipped} skipped / {len(failed)} failed"
     )
+    logger.info(summary)
+    print(summary)
     for label, reason in failed:
         print(f"  {label}: {reason}")
     if failed:
