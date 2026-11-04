@@ -54,7 +54,6 @@ export type DecisionResult = {
   accepted: boolean;
   saved: number;
   already_annotated: boolean;
-  remaining: number;
 };
 
 /** One audit-queue entry: an annotated crop whose model prediction disagrees.
@@ -103,5 +102,4 @@ export type AuditDecisionResult = {
   ok: boolean;
   action: AuditAction;
   saved: number;
-  remaining: number;
 };

@@ -191,7 +191,9 @@ and a plain-words issue list in the sidebar. One keystroke per crop:
 ## API contract
 
 Errors are always JSON `{"error": ...}` (400/404/413/500) and every response
-sets `Cache-Control: no-store`, so labeling state is never stale.
+sets `Cache-Control: no-store`, so labeling state is never stale. Decision
+routes touch only the decided crop's files — constant time per decision,
+independent of dataset size; the queue is only scanned by the `/list` routes.
 
 Core routes:
 
@@ -218,7 +220,7 @@ Review stage (mounted at `/api/review`):
 |---|---|
 | `GET /api/review/list` | `{"predictions": [{path, boxes, empty, error}], "total", "remaining"}` — the queue; `total - remaining` predictions are stale and ignored |
 | `GET /api/review/prediction?path=` | `{"path", "boxes": [{cls, cx, cy, w, h, conf}]}` (normalised) |
-| `POST /api/review/decision` | `{"path", "accept": true\|false}` → `{"ok", "accepted", "saved", "already_annotated", "remaining"}` |
+| `POST /api/review/decision` | `{"path", "accept": true\|false}` → `{"ok", "accepted", "saved", "already_annotated"}` |
 
 Audit stage (mounted at `/api/audit`):
 
@@ -226,7 +228,7 @@ Audit stage (mounted at `/api/audit`):
 |---|---|
 | `GET /api/audit/list` | `{"audits": [{path, label_boxes, pred_boxes, issues, error}], "total", "remaining"}` — `total` counts every compared crop; a side's box count is `null` for a malformed file |
 | `GET /api/audit/compare?path=` | `{"path", "labels", "predictions", "issues"}` — both box sets (normalised, predictions carry `conf`) and the disagreements `[{kind, label, pred, iou}]` |
-| `POST /api/audit/decision` | `{"path", "action": "keep_label"\|"take_prediction"\|"discard_both"}` → `{"ok", "action", "saved", "remaining"}` |
+| `POST /api/audit/decision` | `{"path", "action": "keep_label"\|"take_prediction"\|"discard_both"}` → `{"ok", "action", "saved"}` |
 
 On-disk parsing is strict: malformed label or prediction lines are reported
 (400), never silently skipped or promoted into the dataset.

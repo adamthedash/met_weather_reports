@@ -33,6 +33,15 @@ def decide(ds: Dataset, rel: str, accept: bool) -> dict[str, object]:
     prediction is dropped. Reject just discards the prediction; the crop stays
     unannotated.
 
+    The decision touches only the decided crop's files — no dataset rescan —
+    so its cost is independent of the dataset size. The queue length after
+    the decision is the client's own list minus the decided entry (re-synced
+    via ``GET /list`` when a decision fails).
+
+    Returns:
+        ``{ok, accepted, saved, already_annotated}`` — `saved` is the number
+        of label boxes written (accept).
+
     Raises:
         ApiError: If the prediction is missing, or accept is refused for a
             malformed prediction or a missing crop image.
@@ -57,13 +66,11 @@ def decide(ds: Dataset, rel: str, accept: bool) -> dict[str, object]:
         )
         saved = len(boxes)
     pred.unlink()
-    queue, _stale = ds.queue_and_stale()
     return {
         "ok": True,
         "accepted": accept,
         "saved": saved,
         "already_annotated": already,
-        "remaining": len(queue),
     }
 
 

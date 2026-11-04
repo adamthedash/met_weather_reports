@@ -3,7 +3,8 @@
    * Review workspace: the accept/reject workflow over bootstrap predictions.
    *
    * One keystroke per crop (y/n), decision-free browsing, fit-to-window
-   * display, and explicit outcome messages. Decisions are destructive and
+   * display, explicit outcome messages, and neighbour prefetch so advancing
+   * after a decision paints immediately. Decisions are destructive and
    * immediate (no undo) — accept writes the label before deleting the
    * prediction, reject only discards the prediction. The shared BoxEditor is
    * used read-only: predictions are display-only here; wrong ones are fixed
@@ -86,6 +87,49 @@
   }
 
   // -- data io ----------------------------------------------------------
+  /** One fetched queue entry: decoded crop image + raw prediction boxes. */
+  type Fetched = { im: HTMLImageElement; pred: PredBoxN[] };
+
+  /** Prefetched entries keyed by crop path; kept to the current neighbourhood. */
+  const prefetch = new Map<string, Fetched>();
+
+  /** Fetch one entry's crop image and prediction boxes in parallel. */
+  async function fetchEntry(e: PredEntry): Promise<Fetched> {
+    const [pred, im] = await Promise.all([
+      // a malformed file is already described by e.error; don't refetch it
+      e.error
+        ? Promise.resolve([] as PredBoxN[])
+        : api.prediction(e.path).then((r) => r.boxes),
+      loadImage(api.imageURL(e.path)),
+    ]);
+    return { im, pred };
+  }
+
+  /**
+   * Prefetch the crops around the current one so step/decide paint the next
+   * crop immediately. Best-effort: a failed fetch stays uncached and is
+   * reported by the real load instead.
+   */
+  async function prefetchNeighbours(): Promise<void> {
+    const near = [index + 1, index - 1]
+      .map((j) => (j >= 0 && j < items.length ? items[j] : null))
+      .filter((e): e is PredEntry => !!e && !prefetch.has(e.path));
+    await Promise.all(
+      near.map(async (e) => {
+        try {
+          prefetch.set(e.path, await fetchEntry(e));
+        } catch {
+          // leave uncached so the real load reports the error
+        }
+      }),
+    );
+    // bound the cache to the current neighbourhood
+    for (const key of prefetch.keys()) {
+      if (prefetch.size <= 4) break;
+      prefetch.delete(key);
+    }
+  }
+
   /**
    * Fetch classes and the review queue, then show the first undecided
    * prediction. `anchor` (a crop path) keeps the displayed prediction put when
@@ -95,6 +139,7 @@
     const [cls, listing] = await Promise.all([api.classes(), api.reviewList()]);
     classes = cls.classes;
     items = listing.predictions;
+    prefetch.clear(); // the queue was rebuilt from disk; cached neighbours may be stale
     skipped = listing.total - listing.remaining;
     const i = anchor ? items.findIndex((e) => e.path === anchor) : -1;
     index = i >= 0 ? i : Math.min(index, items.length - 1);
@@ -120,16 +165,10 @@
     }
     let ok = true;
     try {
-      const [pred, im] = await Promise.all([
-        // a malformed file is already described by e.error; don't refetch it
-        e.error
-          ? Promise.resolve({ path: e.path, boxes: [] as PredBoxN[] })
-          : api.prediction(e.path),
-        loadImage(api.imageURL(e.path)),
-      ]);
+      const { im, pred } = prefetch.get(e.path) ?? (await fetchEntry(e));
       if (seq !== loadSeq) return false; // superseded by a newer load
       img = im;
-      boxes = pred.boxes.map((b) => ({
+      boxes = pred.map((b) => ({
         ...fromNormalized(b, im.width, im.height),
         conf: b.conf,
       }));
@@ -140,6 +179,7 @@
       ok = false;
     }
     loading = false;
+    void prefetchNeighbours();
     return ok;
   }
 

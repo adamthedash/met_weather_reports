@@ -50,9 +50,12 @@ def decide(ds: Dataset, rel: str, action: str) -> dict[str, object]:
         action: One of ``keep_label``, ``take_prediction``, ``discard_both``.
 
     Returns:
-        ``{ok, action, saved, remaining}`` — `saved` is the number of label
-        boxes written (take_prediction), `remaining` the queue length after
-        the decision.
+        ``{ok, action, saved}`` — `saved` is the number of label boxes
+        written (take_prediction). The decision touches only the decided
+        crop's files — no dataset rescan — so its cost is independent of the
+        dataset size; the queue length after the decision is the client's own
+        list minus the decided entry (re-synced via ``GET /list`` when a
+        decision fails).
 
     Raises:
         ApiError: If the audit prediction is missing, `action` is unknown,
@@ -90,8 +93,7 @@ def decide(ds: Dataset, rel: str, action: str) -> dict[str, object]:
         if label.is_file():
             label.unlink()
         pred.unlink()
-    queue, _compared = ds.audit_queue()
-    return {"ok": True, "action": action, "saved": saved, "remaining": len(queue)}
+    return {"ok": True, "action": action, "saved": saved}
 
 
 def create_stage(ds: Dataset) -> Stage:
