@@ -26,9 +26,13 @@ Per-page intermediates and QC renders go to ``qc/<source-id>/``:
 
 Pages are processed one at a time and a run is fail-fast: the first page that
 cannot be processed aborts the run with the page name and the cause, and
-artifacts already written for earlier pages stay on disk. The pipeline is
-read-only towards its input and never writes into ``datasets/``; moving
-``patches/<source-id>/`` into ``datasets/digits/images/`` stays a manual step.
+artifacts already written for earlier pages stay on disk. As a sanity check on
+the reconstruction, a page whose estimated grid is smaller than
+``MIN_GRID_COLS`` columns or ``MIN_GRID_ROWS`` rows is rejected before any
+patch is cropped: a register page is a day x month grid, so a smaller grid
+means the reconstruction went wrong. The pipeline is read-only towards its
+input and never writes into ``datasets/``; moving ``patches/<source-id>/``
+into ``datasets/digits/images/`` stays a manual step.
 """
 
 from __future__ import annotations
@@ -61,6 +65,10 @@ SIZE_TOL = 0.2
 EXPAND = 0.1
 MIN_PERIOD_FACTOR = 0.7
 MAX_PERIOD_FACTOR = 3.0
+# A register page is a day x month grid, so a plausible reconstruction has at
+# least 12 columns (Jan-Dec) and 31 rows (days).
+MIN_GRID_COLS = 12
+MIN_GRID_ROWS = 31
 
 
 class Box(TypedDict):
@@ -858,8 +866,9 @@ def process_page(
     Raises:
         ValueError: If the page has no usable cells: nothing detected, a
             malformed box, no box within the median size band, too few box
-            centres to fit a grid, no usable FFT peak, or no supported grid
-            line on an axis.
+            centres to fit a grid, no usable FFT peak, no supported grid
+            line on an axis, or an estimated grid smaller than
+            ``MIN_GRID_COLS`` x ``MIN_GRID_ROWS``.
         OSError: If the page image cannot be read or an artifact cannot be
             written.
     """
@@ -929,6 +938,12 @@ def process_page(
         grid_x_lines, grid_y_lines, k_x_kept, k_y_kept, spacing_x, spacing_y
     )
     render_inferred_overlay(image_path, grid_boxes, qc_dir / "inferred.jpg")
+
+    if grid_x_lines.size < MIN_GRID_COLS or grid_y_lines.size < MIN_GRID_ROWS:
+        raise ValueError(
+            f"grid too small: {grid_x_lines.size} cols x {grid_y_lines.size} rows "
+            f"(need at least {MIN_GRID_COLS} cols x {MIN_GRID_ROWS} rows)"
+        )
 
     patch_paths: list[Path] = export_cell_patches(
         grid_boxes, image_path, patches_root / source_id
