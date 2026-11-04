@@ -2,7 +2,7 @@
 
 import type {
   AuditAction, AuditDecisionResult, AuditList, BoxN, CompareResult,
-  DecisionResult, Listing, PredBoxN, ReviewList,
+  DecisionResult, Listing, PredBoxN, RankingSummary, ReviewList,
 } from "./types";
 
 /** Shape every API error response has (see tools/labeler/app.py). */
@@ -63,8 +63,14 @@ export const api = {
     }),
 
   // -- review stage -----------------------------------------------------
-  /** The review queue: undecided predictions + the stale count. */
-  reviewList: () => fetchJSON<ReviewList>("/api/review/list"),
+  /** Queue rankings that order the review queue (drives the UI selector). */
+  reviewRankings: () =>
+    fetchJSON<{ rankings: RankingSummary[] }>("/api/review/rankings"),
+  /** The review queue in `ranking`'s order: undecided predictions + the stale count. */
+  reviewList: (ranking?: string) =>
+    fetchJSON<ReviewList>(
+      `/api/review/list${ranking ? `?ranking=${encodeURIComponent(ranking)}` : ""}`,
+    ),
   /** The prediction boxes (normalised, with confidence) for one crop. */
   prediction: (path: string) =>
     fetchJSON<{ path: string; boxes: PredBoxN[] }>(

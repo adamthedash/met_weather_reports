@@ -155,6 +155,22 @@ rejected and fixed in the annotate stage.
 - Decided crops never return to the queue; stale prediction files are counted
   in the header and ignored.
 
+The queue can be re-ordered by a **ranking** (selector in the header,
+persisted as `localStorage` key `labeler.review.ranking`): a ranking only
+changes which crop comes next — every queued prediction stays reachable and
+the decisions are identical in every ranking. Available rankings:
+
+- **natural order** (default) — the queue's path order (source page, row,
+  column).
+- **rare labels first** — predictions containing labels that are rare in the
+  accepted annotations come first. Each crop is scored by its rarest predicted
+  label's count of labeled boxes over `labels/` (a never-labeled class counts
+  0 and is therefore rarest); ties keep the natural order. Predicted
+  backgrounds and malformed predictions come last, in natural order. Each
+  scored crop shows a `why here:` note in the sidebar; malformed label files
+  skipped while counting are reported in the list response (`label_errors`)
+  and counted in the header, so a corrupt file cannot silently skew rarity.
+
 ### audit (`/audit`)
 
 Find incorrect labels by comparing them against a model's predictions: run
@@ -218,7 +234,8 @@ Review stage (mounted at `/api/review`):
 
 | Route | Returns |
 |---|---|
-| `GET /api/review/list` | `{"predictions": [{path, boxes, empty, error}], "total", "remaining"}` — the queue; `total - remaining` predictions are stale and ignored |
+| `GET /api/review/list?ranking=` | `{"predictions": [{path, boxes, empty, error, rank_note}], "total", "remaining", "ranking", "label_errors"}` — the queue in the ranking's order (`natural` when omitted, see `GET /api/review/rankings`); `total - remaining` predictions are stale and ignored; `rank_note` is the ranking's explanation of the placement (null when it has none); `label_errors` lists label files the ranking could not parse while scoring |
+| `GET /api/review/rankings` | `{"rankings": [{id, title, description}]}` — available queue rankings |
 | `GET /api/review/prediction?path=` | `{"path", "boxes": [{cls, cx, cy, w, h, conf}]}` (normalised) |
 | `POST /api/review/decision` | `{"path", "accept": true\|false}` → `{"ok", "accepted", "saved", "already_annotated"}` |
 
@@ -242,6 +259,7 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/config.py` | `Config`: bind address, dist, dataset roots |
 | `tools/labeler/dataset.py` | `Dataset` + helpers: classes, image listing, label/prediction I/O |
 | `tools/labeler/compare.py` | model-vs-label comparison: greedy IoU pairing + disagreement issues |
+| `tools/labeler/rankings.py` | review queue rankings: pluggable presentation order (natural, rare labels) |
 | `tools/labeler/errors.py` | `ApiError` (HTTP error with a JSON-safe message) |
 | `tools/labeler/web.py` | request helpers shared by the stage routers |
 | `tools/labeler/stages/base.py` | stage seam: `Stage` contract + `summaries` |
@@ -270,6 +288,17 @@ factory (API router mounted at `/api/<id>`) registered in
 `frontend/src/stages/registry.ts` (workspace component, usually built from the
 shared `BoxEditor`). `stages/annotate.py` is the worked example. The shared
 engine and core routes stay untouched.
+
+## Adding a ranking
+
+A ranking (review queue presentation order) is one entry in
+`tools/labeler/rankings.py`: a `Ranking` (id, title, description) whose
+`order` function maps the review queue entries to themselves — optionally
+enriched with a per-entry `rank_note` — plus the label files it skipped while
+scoring as label errors. `GET /api/review/rankings` and the review
+workspace's selector pick it up automatically; no other file changes.
+`natural_order` and `rare_labels_order` are the worked examples. Rankings
+never filter: queue membership and decisions stay identical across them.
 
 ## Notes & limitations
 

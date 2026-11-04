@@ -33,20 +33,31 @@ export type FilterMode = "all" | "annotated" | "non-annotated";
 
 /** One review-queue entry (mirrors the server's queue_and_stale entries):
  *  `boxes` counts predicted boxes (null for a malformed file), `error` carries
- *  the parse message of a malformed prediction file. */
+ *  the parse message of a malformed prediction file, and `rank_note` is the
+ *  ranking's one-line explanation of the entry's placement (null when the
+ *  ranking has nothing to say). */
 export type PredEntry = {
   path: string;
   boxes: number | null;
   empty: boolean;
   error: string | null;
+  rank_note: string | null;
 };
 
-/** The review queue listing. */
+/** One label file a ranking could not parse while scoring (skipped, reported). */
+export type LabelError = { path: string; error: string };
+
+/** The review queue listing: the queue in the echoed `ranking`'s order. */
 export type ReviewList = {
   predictions: PredEntry[];
   total: number;
   remaining: number;
+  ranking: string;
+  label_errors: LabelError[];
 };
+
+/** Static description of a queue ranking (see tools/labeler/rankings.py). */
+export type RankingSummary = { id: string; title: string; description: string };
 
 /** Result of a review decision (POST /api/review/decision). */
 export type DecisionResult = {

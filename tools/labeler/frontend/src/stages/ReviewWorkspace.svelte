@@ -9,6 +9,11 @@
    * prediction, reject only discards the prediction. The shared BoxEditor is
    * used read-only: predictions are display-only here; wrong ones are fixed
    * in the annotate stage after rejecting.
+   *
+   * The queue's presentation order comes from a selectable ranking (rare
+   * labels first, ...), persisted at `localStorage` key
+   * `labeler.review.ranking`; every ranking serves the same queue with the
+   * same decisions and only changes which crop comes next.
    */
   import { onMount } from "svelte";
 
@@ -16,13 +21,21 @@
   import { api, loadImage } from "../lib/api";
   import { fromNormalized } from "../lib/boxes";
   import { classColor } from "../lib/palette";
-  import type { Box, PredBoxN, PredEntry } from "../lib/types";
+  import type {
+    Box, LabelError, PredBoxN, PredEntry, RankingSummary,
+  } from "../lib/types";
+
+  /** localStorage key of the persisted queue ranking choice. */
+  const RANK_KEY = "labeler.review.ranking";
 
   let classes = $state<string[]>([]);
   let items = $state<PredEntry[]>([]);
   let index = $state(0);
   let reviewed = $state(0);
   let skipped = $state(0); // stale prediction files the queue ignores
+  let labelErrors = $state<LabelError[]>([]); // label files a ranking skipped
+  let rankings = $state<RankingSummary[]>([]);
+  let rankingId = $state("natural"); // current queue ranking
   let img = $state<HTMLImageElement | null>(null);
   let boxes = $state<Box[]>([]);
   let selected = $state(-1); // read-only view: never leaves -1
@@ -131,16 +144,21 @@
   }
 
   /**
-   * Fetch classes and the review queue, then show the first undecided
-   * prediction. `anchor` (a crop path) keeps the displayed prediction put when
-   * the queue is re-synced from disk.
+   * Fetch classes and the review queue (in the current ranking's order), then
+   * show the first undecided prediction. `anchor` (a crop path) keeps the
+   * displayed prediction put when the queue is re-synced from disk.
    */
   async function loadList(anchor: string | null = null): Promise<void> {
-    const [cls, listing] = await Promise.all([api.classes(), api.reviewList()]);
+    const [cls, listing] = await Promise.all([
+      api.classes(),
+      api.reviewList(rankingId),
+    ]);
     classes = cls.classes;
     items = listing.predictions;
     prefetch.clear(); // the queue was rebuilt from disk; cached neighbours may be stale
     skipped = listing.total - listing.remaining;
+    labelErrors = listing.label_errors;
+    rankingId = listing.ranking;
     const i = anchor ? items.findIndex((e) => e.path === anchor) : -1;
     index = i >= 0 ? i : Math.min(index, items.length - 1);
     if (index < 0) index = 0;
@@ -231,6 +249,20 @@
     await loadCurrent();
   }
 
+  /** Switch the queue ranking: persist the choice and reload from the top. */
+  async function onRankingChange(e: Event): Promise<void> {
+    const id = (e.currentTarget as HTMLSelectElement).value;
+    if (id === rankingId) return;
+    rankingId = id;
+    localStorage.setItem(RANK_KEY, id);
+    index = 0; // a new order: start from its first entry
+    try {
+      await loadList();
+    } catch (err) {
+      setStatus("reload failed: " + errMsg(err), "error");
+    }
+  }
+
   // -- keys -------------------------------------------------------------
   /** Global shortcuts: accept, reject, and decision-free browsing. */
   function onKey(e: KeyboardEvent): void {
@@ -269,9 +301,18 @@
 
   onMount(() => {
     syncWrap();
-    void loadList().catch((err) =>
-      setStatus("startup failed: " + errMsg(err), "error"),
-    );
+    rankingId = localStorage.getItem(RANK_KEY) || "natural";
+    void (async () => {
+      try {
+        rankings = (await api.reviewRankings()).rankings;
+        if (!rankings.some((r) => r.id === rankingId)) {
+          rankingId = "natural"; // stale stored choice
+        }
+        await loadList();
+      } catch (err) {
+        setStatus("startup failed: " + errMsg(err), "error");
+      }
+    })();
   });
 </script>
 
@@ -286,10 +327,26 @@
       <span class="progress">
         reviewed {reviewed} · remaining {items.length}{skipped
           ? ` · ${skipped} stale ignored`
+          : ""}{labelErrors.length
+          ? ` · ${labelErrors.length} malformed label file${
+              labelErrors.length === 1 ? "" : "s"
+            } skipped in rarity counts`
           : ""}
       </span>
     </div>
     <div class="row">
+      <label class="rank">
+        rank
+        <select
+          value={rankingId}
+          disabled={busy}
+          onchange={(e) => void onRankingChange(e)}
+        >
+          {#each rankings as r (r.id)}
+            <option value={r.id}>{r.title}</option>
+          {/each}
+        </select>
+      </label>
       <button onclick={() => step(-1)} disabled={busy || index <= 0}>← prev</button>
       <button onclick={() => step(1)} disabled={busy || index >= items.length - 1}>
         next →
@@ -330,6 +387,9 @@
           </li>
         {/each}
       </ul>
+      {#if curItem?.rank_note}
+        <div class="rank-note">why here: {curItem.rank_note}</div>
+      {/if}
       <div class="empty-note">{emptyNote}</div>
       <h3>keys</h3>
       <ul class="help">
@@ -407,6 +467,26 @@
     border-color: var(--error);
     color: var(--error);
   }
+  .rank {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--dim);
+    font-size: 12px;
+  }
+  select {
+    background: #2a2e37;
+    color: var(--text);
+    border: 1px solid var(--edge);
+    border-radius: 5px;
+    padding: 3px 6px;
+    font: inherit;
+    cursor: pointer;
+  }
+  select:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
   kbd {
     background: #2a2e37;
     border: 1px solid var(--edge);
@@ -476,6 +556,10 @@
     font-family: ui-monospace, monospace;
   }
   .empty-note {
+    color: var(--dim);
+    font-style: italic;
+  }
+  .rank-note {
     color: var(--dim);
     font-style: italic;
   }

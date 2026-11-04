@@ -161,14 +161,38 @@ class Dataset:
     def read_labels(self, rel: str) -> list[Box]:
         """Read the YOLO label file mirroring `rel`; empty when absent or unlabeled.
 
+        Parsing is strict (see :meth:`read_label_file`).
+
         Raises:
-            ApiError: If a label line has the wrong field count or an
-                out-of-range class.
+            ApiError: If a label line has the wrong field count or
+                non-numeric fields, or a class id is out of range.
         """
-        boxes: list[Box] = []
         path = self.label_path_for(rel)
         if not path.is_file():
-            return boxes
+            return []
+        return self.read_label_file(rel, path)
+
+    def read_label_file(self, rel: str, path: Path) -> list[Box]:
+        """Strictly parse one five-column YOLO label file.
+
+        Each line is ``<class> <cx> <cy> <w> <h>`` in normalised 0-1
+        coordinates. Parsing is strict: a malformed line is reported, never
+        skipped, so corruption can not slip into the dataset as a label.
+
+        Args:
+            rel: Crop path the file mirrors; used in error messages.
+            path: The label file to parse.
+
+        Returns:
+            The label boxes in file order; empty for an empty label file.
+
+        Raises:
+            ApiError: If the file is missing, a line has the wrong field
+                count or non-numeric fields, or a class id is out of range.
+        """
+        if not path.is_file():
+            raise ApiError(404, f"no such label: {rel}")
+        boxes: list[Box] = []
         for lineno, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), 1
         ):
@@ -181,8 +205,13 @@ class Dataset:
                     400,
                     f"{path.name} line {lineno}: expected 5 fields, got {len(parts)}",
                 )
-            cls = int(parts[0])
-            cx, cy, w, h = (float(v) for v in parts[1:])
+            try:
+                cls = int(parts[0])
+                cx, cy, w, h = (float(v) for v in parts[1:])
+            except ValueError as exc:
+                raise ApiError(
+                    400, f"{path.name} line {lineno}: non-numeric field"
+                ) from exc
             if not 0 <= cls < len(self.classes):
                 raise ApiError(
                     400, f"{path.name} line {lineno}: class {cls} out of range"
@@ -408,6 +437,36 @@ class Dataset:
         }
         queued_stems = {Path(rel).with_suffix("").as_posix() for rel in queued}
         return queue, len(on_disk - queued_stems)
+
+    def label_class_counts(self) -> tuple[list[int], list[dict[str, object]]]:
+        """Count labeled boxes per class across the labels tree.
+
+        Used by queue rankings (``tools/labeler/rankings.py``) to measure
+        label rarity. Every label file under ``labels_root`` is parsed with
+        the strict :meth:`read_label_file` format; a malformed file
+        contributes nothing and is reported instead of silently skewing the
+        counts (it is also surfaced by the annotate and audit stages).
+
+        Returns:
+            The ``(counts, skipped)`` pair: `counts` holds one box count per
+            class index (0 for never-labeled classes), `skipped` holds
+            ``{"path", "error"}`` entries for label files that failed to
+            parse.
+        """
+        counts = [0] * len(self.classes)
+        skipped: list[dict[str, object]] = []
+        for path in sorted(self.labels_root.rglob("*.txt")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(self.labels_root).as_posix()
+            try:
+                boxes = self.read_label_file(rel, path)
+            except ApiError as exc:
+                skipped.append({"path": rel, "error": exc.message})
+                continue
+            for b in boxes:
+                counts[b["cls"]] += 1
+        return counts, skipped
 
     def audit_queue(self) -> tuple[list[dict[str, object]], int]:
         """Return the audit queue and the number of compared crops.

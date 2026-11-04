@@ -11,6 +11,10 @@ Per crop of the queue (crops with a prediction file and no label file):
 Decisions are destructive and immediate — there is no undo. Wrong predictions
 are cheap to regenerate (``scripts/bootstrap_annotations.py``), and wrong
 labels can be fixed in the annotate stage.
+
+The queue's presentation order is pluggable (``tools/labeler/rankings.py``):
+``GET /list`` serves it in a chosen ranking's order (rare labels first, ...),
+and decisions are identical in every ranking.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from fastapi import APIRouter, Query, Request
 
 from tools.labeler.dataset import Box, Dataset
 from tools.labeler.errors import ApiError
+from tools.labeler.rankings import RANKINGS, find_ranking, summaries
 from tools.labeler.stages.base import Stage
 from tools.labeler.web import read_json_body, require_arg
 
@@ -79,14 +84,34 @@ def create_stage(ds: Dataset) -> Stage:
     router = APIRouter()
 
     @router.get("/list")
-    async def listing() -> dict[str, object]:
-        """Respond with the review queue and the stale prediction count."""
+    async def listing(
+        ranking: str | None = Query(default=None),
+    ) -> dict[str, object]:
+        """Respond with the review queue and the stale prediction count.
+
+        `ranking` names a ranking from ``GET /rankings`` (default:
+        ``natural``); it only changes presentation order — queue membership
+        is identical in every ranking. Entries always carry `rank_note` (the
+        ranking's one-line explanation of the placement, null when it has
+        none), and `label_errors` lists the label files the ranking could not
+        parse while scoring (only rankings that read label files report any).
+        """
+        r = find_ranking(ranking or "natural")
         queue, stale = ds.queue_and_stale()
+        ordered, label_errors = r.order(ds, queue)
+        entries = [{**e, "rank_note": e.get("rank_note")} for e in ordered]
         return {
-            "predictions": queue,
-            "total": len(queue) + stale,
-            "remaining": len(queue),
+            "predictions": entries,
+            "total": len(entries) + stale,
+            "remaining": len(entries),
+            "ranking": r.id,
+            "label_errors": label_errors,
         }
+
+    @router.get("/rankings")
+    async def get_rankings() -> dict[str, object]:
+        """Every queue ranking (drives the review workspace's selector)."""
+        return {"rankings": summaries(RANKINGS)}
 
     @router.get("/prediction")
     async def get_prediction(
