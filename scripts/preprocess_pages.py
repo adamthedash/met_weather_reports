@@ -24,21 +24,33 @@ Per-page intermediates and QC renders go to ``qc/<source-id>/``:
 - ``grid_phase.jpg`` -- FFT power spectra of the box centres
 - ``inferred.jpg`` -- raw image with the inferred grid boxes overlaid
 
-Pages are processed one at a time and a run is fail-fast: the first page that
-cannot be processed aborts the run with the page name and the cause, and
-artifacts already written for earlier pages stay on disk. As a sanity check on
-the reconstruction, a page whose estimated grid is smaller than
-``MIN_GRID_COLS`` columns or ``MIN_GRID_ROWS`` rows is rejected before any
-patch is cropped: a register page is a day x month grid, so a smaller grid
-means the reconstruction went wrong. The pipeline is read-only towards its
+Pages are processed one at a time. A page that cannot be processed with an
+expected error (no usable cells, an unreadable image, an unwritable artifact)
+is logged and skipped, and the run continues with the next page; failed pages
+are listed in the run summary and make the run exit non-zero. Unexpected
+errors abort the run immediately so bugs surface. As a sanity check on the
+reconstruction, a page whose estimated grid is smaller than ``MIN_GRID_COLS``
+columns or ``MIN_GRID_ROWS`` rows is rejected before any patch is cropped: a
+register page is a day x month grid, so a smaller grid means the
+reconstruction went wrong. Artifacts already written for a page, including
+those of a failed one, stay on disk. The pipeline is read-only towards its
 input and never writes into ``datasets/``; moving ``patches/<source-id>/``
 into ``datasets/digits/images/`` stays a manual step.
+
+Run activity is logged to stderr and appended to ``<out>/preprocess.log``:
+initialisation (model loading, page scan), every per-page pipeline step and
+written artifact at DEBUG, one line per completed page and one warning per
+failed page. ``--log-level`` narrows the verbosity (``DEBUG``, the default,
+shows everything); the run summary on stdout is not affected.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
+import time
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
@@ -70,6 +82,11 @@ MAX_PERIOD_FACTOR = 3.0
 MIN_GRID_COLS = 12
 MIN_GRID_ROWS = 31
 
+LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+
+logger = logging.getLogger(__name__)
+
 
 class Box(TypedDict):
     """A single detected object (e.g. a table cell) from PaddleOCR."""
@@ -99,6 +116,40 @@ class PageSummary(NamedTuple):
     rms_x: float
     rms_y: float
     n_patches: int
+
+
+# ---------------------------------------------------------------------------
+# logging
+
+
+def setup_logging(level_name: str, log_file: Path) -> None:
+    """Configure run logging: stderr plus an appended ``log_file``.
+
+    Both handlers receive identical records with UTC timestamps; the log file
+    is appended to, so reruns extend the same trail. The ``matplotlib``,
+    ``ppocr``, ``paddlex`` and ``onnxruntime`` loggers are quieted to WARNING
+    so font-matching and model-stack chatter do not drown the run's own
+    records.
+
+    Args:
+        level_name: Logging level name (``DEBUG``..``CRITICAL``). ``DEBUG``,
+            the ``--log-level`` default, logs everything including every
+            pipeline step and written artifact.
+        log_file: Log file to append to; the parent directory is created as
+            needed.
+    """
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
+    formatter.converter = time.gmtime
+    root = logging.getLogger()
+    root.setLevel(level_name)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+    for handler in (stderr_handler, file_handler):
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    for noisy in ("matplotlib", "ppocr", "paddlex", "onnxruntime"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 # ---------------------------------------------------------------------------
@@ -873,6 +924,7 @@ def process_page(
             written.
     """
     source_id: str = image_path.stem
+    logger.debug("processing %s", repo_relative(image_path))
     qc_dir: Path = qc_root / source_id
     qc_dir.mkdir(parents=True, exist_ok=True)
 
@@ -882,11 +934,15 @@ def process_page(
 
     result: PaddleOcrResult = detect_cells(model, image_path, threshold)
     write_result_json(result, qc_dir / "result.json")
+    logger.debug("%s: wrote %s", source_id, repo_relative(qc_dir / "result.json"))
 
     boxes: pl.DataFrame = load_page_boxes(result)
+    logger.debug("%s: %d boxes detected", source_id, boxes.height)
     render_detection_overlay(image_path, boxes, qc_dir / "paddle.jpg")
+    logger.debug("%s: wrote %s", source_id, repo_relative(qc_dir / "paddle.jpg"))
 
     med_w, med_h = median_box_size(boxes)
+    logger.debug("%s: median box size %.1f x %.1f px", source_id, med_w, med_h)
     render_cell_distribution(
         boxes["box_width"].to_numpy(),
         boxes["box_height"].to_numpy(),
@@ -895,7 +951,14 @@ def process_page(
         source_id,
         qc_dir / "cell_dist.jpg",
     )
+    logger.debug("%s: wrote %s", source_id, repo_relative(qc_dir / "cell_dist.jpg"))
     filtered: pl.DataFrame = filter_boxes_by_median_size(boxes, med_w, med_h)
+    logger.debug(
+        "%s: %d of %d boxes within median size band",
+        source_id,
+        filtered.height,
+        boxes.height,
+    )
 
     centers: pl.DataFrame = filtered.with_columns(
         ((pl.col("x1") + pl.col("x2")) / 2).alias("cx"),
@@ -911,13 +974,17 @@ def process_page(
         min_period=MIN_PERIOD_FACTOR * med_h,
         max_period=MAX_PERIOD_FACTOR * med_h,
     )
+    logger.debug("%s: spacing %.1f x %.1f px", source_id, spacing_x, spacing_y)
     render_spacing_spectra(
         {"x": (spacing_x, freqs_x, power_x), "y": (spacing_y, freqs_y, power_y)},
         qc_dir / "grid_phase.jpg",
     )
+    logger.debug("%s: wrote %s", source_id, repo_relative(qc_dir / "grid_phase.jpg"))
 
     phase_x, _, residual_x = fit_grid_axis(centers["cx"].to_numpy(), spacing_x)
     phase_y, _, residual_y = fit_grid_axis(centers["cy"].to_numpy(), spacing_y)
+    rms_x = float(np.sqrt(np.mean(residual_x**2)))
+    rms_y = float(np.sqrt(np.mean(residual_y**2)))
 
     k_x_kept, grid_x_lines = kept_grid_lines(
         spacing_x,
@@ -934,10 +1001,19 @@ def process_page(
         filtered["y2"].to_numpy(),
     )
 
+    logger.debug(
+        "%s: grid %d cols x %d rows, residual RMS %.2f x %.2f px",
+        source_id,
+        grid_x_lines.size,
+        grid_y_lines.size,
+        rms_x,
+        rms_y,
+    )
     grid_boxes: pl.DataFrame = build_grid_boxes(
         grid_x_lines, grid_y_lines, k_x_kept, k_y_kept, spacing_x, spacing_y
     )
     render_inferred_overlay(image_path, grid_boxes, qc_dir / "inferred.jpg")
+    logger.debug("%s: wrote %s", source_id, repo_relative(qc_dir / "inferred.jpg"))
 
     if grid_x_lines.size < MIN_GRID_COLS or grid_y_lines.size < MIN_GRID_ROWS:
         raise ValueError(
@@ -955,8 +1031,8 @@ def process_page(
         n_cols=grid_x_lines.size,
         spacing_x=spacing_x,
         spacing_y=spacing_y,
-        rms_x=float(np.sqrt(np.mean(residual_x**2))),
-        rms_y=float(np.sqrt(np.mean(residual_y**2))),
+        rms_x=rms_x,
+        rms_y=rms_y,
         n_patches=len(patch_paths),
     )
 
@@ -984,36 +1060,95 @@ def parse_args() -> argparse.Namespace:
         default=0.3,
         help="minimum detection confidence (default: %(default)s)",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="DEBUG",
+        help="logging verbosity; DEBUG (the default) logs every pipeline step and written artifact",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Process every page under ``--data`` and print the run summary."""
+    """Process every page under ``--data`` and print the run summary.
+
+    Logging is configured first from ``--log-level`` (stderr plus the appended
+    ``<out>/preprocess.log``); the run summary still goes to stdout. Pages
+    that fail with an expected error are logged and skipped; the run summary
+    lists the failed pages and the run exits 1 if any page failed. Unexpected
+    errors abort the run immediately so bugs surface.
+
+    Raises:
+        SystemExit: If the arguments are invalid, the input cannot be
+            scanned, the model cannot be loaded, or any page failed.
+    """
     args = parse_args()
-    if not 0.0 <= args.threshold <= 1.0:
-        raise SystemExit(f"--threshold must be between 0 and 1, got {args.threshold}")
     data_dir: Path = args.data.resolve()
     out_dir: Path = args.out.resolve()
-    pages: list[Path] = scan_pages(data_dir)
+    setup_logging(args.log_level, out_dir / "preprocess.log")
 
-    model = TableCellsDetection(model_name=MODEL_NAME, engine="onnxruntime")
+    if not 0.0 <= args.threshold <= 1.0:
+        logger.error("--threshold must be between 0 and 1, got %s", args.threshold)
+        raise SystemExit(f"--threshold must be between 0 and 1, got {args.threshold}")
+
+    try:
+        pages: list[Path] = scan_pages(data_dir)
+    except ValueError as exc:
+        logger.error("cannot scan %s: %s", repo_relative(data_dir), exc)
+        raise SystemExit(f"cannot scan {data_dir}: {exc}") from exc
+    logger.info("%d pages under %s", len(pages), repo_relative(data_dir))
+
     patches_root: Path = out_dir / "patches"
     qc_root: Path = out_dir / "qc"
+    logger.info(
+        "writing %s and %s (threshold %.2f)",
+        repo_relative(patches_root),
+        repo_relative(qc_root),
+        args.threshold,
+    )
+
+    logger.info("loading model %s (engine=onnxruntime)", MODEL_NAME)
+    try:
+        model = TableCellsDetection(model_name=MODEL_NAME, engine="onnxruntime")
+    except Exception as exc:
+        logger.error("cannot load model %s: %s", MODEL_NAME, exc)
+        raise SystemExit(f"cannot load model {MODEL_NAME}: {exc}") from exc
+    logger.info("model ready")
 
     total_patches: int = 0
+    failed: list[tuple[str, str]] = []
     for page in pages:
         try:
             summary = process_page(model, page, patches_root, qc_root, args.threshold)
         except (ValueError, OSError) as exc:
-            raise SystemExit(f"{page}: {exc}") from exc
+            logger.warning("page %s failed: %s", repo_relative(page), exc)
+            failed.append((repo_relative(page), str(exc)))
+            continue
         total_patches += summary.n_patches
-        print(
-            f"{summary.source_id}: {summary.n_cols} cols x {summary.n_rows} rows "
-            f"(spacing {summary.spacing_x:.1f} x {summary.spacing_y:.1f} px, "
-            f"residual RMS {summary.rms_x:.2f} x {summary.rms_y:.2f} px), "
-            f"{summary.n_patches} patches"
+        logger.info(
+            "%s: %d cols x %d rows (spacing %.1f x %.1f px, "
+            "residual RMS %.2f x %.2f px), %d patches",
+            summary.source_id,
+            summary.n_cols,
+            summary.n_rows,
+            summary.spacing_x,
+            summary.spacing_y,
+            summary.rms_x,
+            summary.rms_y,
+            summary.n_patches,
         )
-    print(f"{len(pages)} pages / {total_patches} patches -> {patches_root}")
+
+    run_summary = (
+        f"{len(pages)} pages / {total_patches} patches -> {patches_root} "
+        f"({len(failed)} failed)"
+    )
+    logger.info(run_summary)
+    print(run_summary)
+    for label, reason in failed:
+        print(f"  {label}: {reason}")
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
