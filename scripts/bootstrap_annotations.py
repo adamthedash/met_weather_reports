@@ -18,11 +18,28 @@ Prediction files are *not* valid YOLO label files (labels take exactly 5
 fields); drop the last column before promoting them into ``labels/``. The
 ``predictions`` tree is owned by this script: prediction files whose crop has
 since been annotated (or removed) are pruned on every run.
+
+Inference is lazy and batched: crops are processed in batches of
+``--batch-size`` and each batch's prediction files are written before the next
+batch is loaded, so memory use stays flat no matter how many crops there are.
+A run interrupted mid-way leaves the completed batches' prediction files on
+disk — harmless, since those crops are still unlabeled and are simply
+re-predicted (and overwritten) by the next run.
+
+Run activity is logged to stderr and appended to ``<dataset>/bootstrap.log``:
+initialisation (model loading, dataset scan), one line per completed batch,
+every written prediction file at DEBUG, and the run totals. ``--log-level``
+narrows the verbosity (``DEBUG``, the default, shows everything); the run
+summary on stdout is not affected.
 """
 
 from __future__ import annotations
 
 import argparse
+import itertools
+import logging
+import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -34,6 +51,43 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
 # A predicted box: (cls, cx, cy, w, h, conf) in normalised 0-1 coordinates.
 Prediction = tuple[int, float, float, float, float, float]
+
+LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# logging
+
+
+def setup_logging(level_name: str, log_file: Path) -> None:
+    """Configure run logging: stderr plus an appended ``log_file``.
+
+    Both handlers receive identical records with UTC timestamps; the log file
+    is appended to, so reruns extend the same trail. The ``ultralytics`` logger
+    is quieted to WARNING so model-stack chatter does not drown the run's own
+    records.
+
+    Args:
+        level_name: Logging level name (``DEBUG``..``CRITICAL``). ``DEBUG``,
+            the ``--log-level`` default, logs everything including every
+            written prediction file.
+        log_file: Log file to append to; the parent directory is created as
+            needed.
+    """
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
+    formatter.converter = time.gmtime
+    root = logging.getLogger()
+    root.setLevel(level_name)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+    for handler in (stderr_handler, file_handler):
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    logging.getLogger("ultralytics").setLevel(logging.WARNING)
 
 
 # ---------------------------------------------------------------------------
@@ -247,36 +301,70 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, required=True, help="trained YOLO weights (.pt)")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_DIR, help="dataset root (default: %(default)s)")
     parser.add_argument("--conf", type=float, default=0.25, help="minimum confidence for a written box (default: %(default)s)")
+    parser.add_argument(
+        "--batch-size", type=int, default=32, help="images per inference batch; bounds peak memory (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="DEBUG",
+        help="logging verbosity; DEBUG (the default) logs every written prediction file",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Predict boxes for every non-annotated crop and write the prediction files."""
+    """Predict boxes for every non-annotated crop and write the prediction files.
+
+    Logging is configured first from ``--log-level`` (stderr plus the appended
+    ``<dataset>/bootstrap.log``); the run summary still goes to stdout. Crops
+    are inferred in lazily loaded batches of ``--batch-size`` and each batch's
+    prediction files are written before the next batch is loaded, so memory
+    use stays flat regardless of dataset size.
+    """
     args = parse_args()
+    dataset = args.dataset.resolve()
+    setup_logging(args.log_level, dataset / "bootstrap.log")
     if not args.model.is_file():
+        logger.error("model weights not found: %s", args.model)
         raise SystemExit(f"model weights not found: {args.model}")
     if not 0.0 <= args.conf <= 1.0:
+        logger.error("--conf must be between 0 and 1, got %s", args.conf)
         raise SystemExit(f"--conf must be between 0 and 1, got {args.conf}")
-    dataset = args.dataset.resolve()
+    if args.batch_size < 1:
+        logger.error("--batch-size must be at least 1, got %s", args.batch_size)
+        raise SystemExit(f"--batch-size must be at least 1, got {args.batch_size}")
+    logger.info("model=%s dataset=%s conf=%g batch_size=%d", args.model, dataset, args.conf, args.batch_size)
+
     annotated, targets = scan_dataset(dataset)
+    logger.info("scan: %d annotated / %d unlabeled crops", len(annotated), len(targets))
 
     predictions_root = dataset / "predictions"
     if targets:
         classes = load_classes(dataset / "data.yaml")
         model = YOLO(str(args.model))
         check_model_names(model, classes)
-        predicted = run_inference(model, targets, args.conf)
+        logger.info("loaded %s; model classes match data.yaml (%d classes)", args.model, len(classes))
         n_boxes = 0
-        for image in targets:
-            rel = image.relative_to(dataset / "images")
-            boxes = predicted[image.resolve()]
-            write_prediction(prediction_path_for(rel, predictions_root), boxes)
-            n_boxes += len(boxes)
+        for i, batch in enumerate(itertools.batched(targets, args.batch_size), start=1):
+            predicted = run_inference(model, list(batch), args.conf)
+            for image in batch:
+                rel = image.relative_to(dataset / "images")
+                boxes = predicted[image.resolve()]
+                pred_path = prediction_path_for(rel, predictions_root)
+                write_prediction(pred_path, boxes)
+                logger.debug("%s: %d boxes -> %s", image, len(boxes), pred_path)
+                n_boxes += len(boxes)
+            logger.info("batch %d: %d images, %d boxes so far", i, len(batch), n_boxes)
+        logger.info("done: %d images / %d boxes -> %s", len(targets), n_boxes, predictions_root)
         print(f"{len(targets)} images / {n_boxes} boxes -> {predictions_root}")
     else:
+        logger.info("nothing to do: all %d crops are annotated", len(annotated))
         print(f"nothing to do: all {len(annotated)} crops are annotated")
     removed = prune_stale(predictions_root, targets, dataset / "images")
     if removed:
+        logger.info("pruned %d stale prediction files", removed)
         print(f"pruned {removed} stale prediction files")
 
 
