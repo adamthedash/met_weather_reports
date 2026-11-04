@@ -66,8 +66,9 @@ def setup_logging(level_name: str, log_file: Path) -> None:
     """Configure run logging: stderr plus an appended ``log_file``.
 
     Both handlers receive identical records with UTC timestamps; the log file
-    is appended to, so reruns extend the same trail. The ``ultralytics`` logger
-    is quieted to WARNING so model-stack chatter does not drown the run's own
+    is appended to, so reruns extend the same trail. The ``PIL`` and
+    ``ultralytics`` loggers are quieted to WARNING so Pillow's per-chunk
+    image-decoder traces and model-stack chatter do not drown the run's own
     records.
 
     Args:
@@ -87,7 +88,8 @@ def setup_logging(level_name: str, log_file: Path) -> None:
     for handler in (stderr_handler, file_handler):
         handler.setFormatter(formatter)
         root.addHandler(handler)
-    logging.getLogger("ultralytics").setLevel(logging.WARNING)
+    for noisy in ("PIL", "ultralytics"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 # ---------------------------------------------------------------------------
