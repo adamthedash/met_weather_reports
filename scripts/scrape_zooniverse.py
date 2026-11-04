@@ -3,13 +3,13 @@
 
 Usage:
 
-    pixi run python scripts/scrape_zooniverse.py --project owner/name --out data/raw
+    pixi run python scripts/scrape_zooniverse.py --project owner/name --out data
 
 For every subject of the given public Zooniverse (Panoptes) project the image
 files are downloaded to ``<out>/images/<subject_id>.<ext>`` -- one page per
-file, named by the Zooniverse subject id, the unique stems expected by
-``data/raw`` (see ``scripts/preprocess_pages.py``, whose recursive scan picks
-up the ``images/`` folder). A subject with several images yields
+file, named by the Zooniverse subject id, the unique stems expected by the
+preprocessing pipeline (see ``scripts/preprocess_pages.py``, whose recursive
+scan picks up the ``images/`` folder). A subject with several images yields
 ``<subject_id>.<ext>``, ``<subject_id>_2.<ext>``, ... in location order.
 Subject-set and workflow membership is not encoded in the paths (a
 subject belongs to one or more subject sets and to no workflow); it is recorded

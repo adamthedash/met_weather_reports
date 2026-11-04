@@ -5,11 +5,16 @@ Usage:
 
     pixi run python scripts/preprocess_pages.py
 
-For every page image under ``data`` the pipeline runs PaddleOCR table cell
-detection, reconstructs the page's cell grid (spacing via an FFT over the
-detected box centres, phase via a circular mean) and crops one patch per grid
-cell to ``patches/<source-id>/<row>_<col>.png`` -- the naming and geometry
-expected by ``datasets/digits/images`` (see ``tools/labeler/README.md``).
+For every page image under ``--data`` (by default ``data/images``, the image
+folder written by ``scripts/scrape_zooniverse.py``) the pipeline runs
+PaddleOCR table cell detection, reconstructs the page's cell grid (spacing via
+an FFT over the detected box centres, phase via a circular mean) and crops one
+patch per grid cell to ``patches/<source-id>/<row>_<col>.png`` -- the naming
+and geometry expected by ``datasets/digits/images`` (see
+``tools/labeler/README.md``). ``<source-id>`` is the page image's file stem,
+used as-is: the subject id for scraped pages (``103801209``, or
+``103801209_2`` for a subject's second page), so the ``patches/`` and ``qc/``
+folders are organised by subject id.
 
 Per-page intermediates and QC renders go to ``qc/<source-id>/``:
 
@@ -22,7 +27,7 @@ Per-page intermediates and QC renders go to ``qc/<source-id>/``:
 Pages are processed one at a time and a run is fail-fast: the first page that
 cannot be processed aborts the run with the page name and the cause, and
 artifacts already written for earlier pages stay on disk. The pipeline is
-read-only towards ``data/`` and never writes into ``datasets/``; moving
+read-only towards its input and never writes into ``datasets/``; moving
 ``patches/<source-id>/`` into ``datasets/digits/images/`` stays a manual step.
 """
 
@@ -47,7 +52,7 @@ from paddleocr import TableCellsDetection
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DATA_DIR = REPO_ROOT / "data/raw"
+DEFAULT_DATA_DIR = REPO_ROOT / "data/images"
 DEFAULT_OUT_DIR = REPO_ROOT / "data"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
