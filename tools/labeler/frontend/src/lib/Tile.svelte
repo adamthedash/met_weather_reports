@@ -3,11 +3,14 @@
    * Batch grid tile: read-only display of one queued crop with its predicted
    * boxes and whole-image predicted reading, plus the tile's state chrome.
    *
-   * The canvas mirrors the review workspace's rendering at tile scale: the
-   * crop with its predicted boxes (class glyph on a class-coloured chip,
-   * tile-size constants in `labels.ts`) and the reading on a dark chip at the
-   * image's top-centre. State chrome is DOM, not drawn: the `PREDICTED EMPTY`
-   * badge, the pending mark label (`REJECTED` / `NEEDS MANUAL`, with the
+   * The canvas mirrors the review workspace's rendering at tile scale (the
+   * fit box scales with the `scale` prop while chip text sizes stay fixed
+   * screen px — the constants in `labels.ts`): the crop with its predicted
+   * boxes — class glyph on a class-coloured chip plus the box's confidence on
+   * a small neutral chip right-aligned at its top-right — and the reading on
+   * a dark chip at the image's top-centre, which reads "EMPTY" for a
+   * predicted background (the tile's only empty label). State chrome is DOM,
+   * not drawn: the pending mark label (`REJECTED` / `NEEDS MANUAL`, with the
    * tile's border coloured to match), a malformed prediction's parse message,
    * and an image-load-failure note. There is no caption strip by design.
    *
@@ -18,12 +21,13 @@
   import { loadImage, api } from "./api";
   import { clamp, fromNormalized } from "./boxes";
   import {
-    TILE_LABEL_TEXT_PX, TILE_READING_TEXT_PX, chipSize, drawChip, readingOf,
+    TILE_CONF_TEXT_PX, TILE_LABEL_TEXT_PX, TILE_READING_TEXT_PX, chipSize,
+    drawChip, readingOf,
   } from "./labels";
   import { classColor, classTextColor } from "./palette";
   import type { BatchEntry, ClassInfo, TileMark } from "./types";
 
-  /** Largest tile footprint the crop is fitted into (CSS px). */
+  /** Largest tile footprint the crop is fitted into at scale 1 (CSS px). */
   const MAX_W = 200;
   const MAX_H = 130;
 
@@ -31,6 +35,7 @@
     entry,
     classes,
     mark,
+    scale = 1,
     ontoggle,
   }: {
     entry: BatchEntry;
@@ -38,6 +43,8 @@
     classes: ClassInfo[];
     /** The tile's pending mark ("" = accepted on commit). */
     mark: TileMark;
+    /** Tile size scale (the workspace's image-size ± controls). */
+    scale?: number;
     /** Report a click: true for shift-click (flag), false for plain (reject). */
     ontoggle: (manual: boolean) => void;
   } = $props();
@@ -72,7 +79,7 @@
       c.height = 0;
       return;
     }
-    const z = Math.min(MAX_W / im.width, MAX_H / im.height);
+    const z = Math.min((MAX_W * scale) / im.width, (MAX_H * scale) / im.height);
     const W = im.width * z, H = im.height * z;
     const dpr = window.devicePixelRatio || 1;
     c.width = Math.round(W * dpr);
@@ -86,7 +93,10 @@
 
     const pred = entry.boxes;
     if (pred === null) return; // malformed: nothing parseable to draw
-    const boxes = pred.map((b) => fromNormalized(b, im.width, im.height));
+    const boxes = pred.map((b) => ({
+      ...fromNormalized(b, im.width, im.height),
+      conf: b.conf,
+    }));
     for (const b of boxes) {
       const color = classColor(b.cls);
       const x = b.x * z, y = b.y * z, w = b.w * z, h = b.h * z;
@@ -96,27 +106,49 @@
       ctx.strokeStyle = color;
       ctx.strokeRect(x, y, w, h);
 
+      // class glyph on a class-coloured chip, the box's confidence on a small
+      // neutral chip right-aligned at its top-right (review's prominent
+      // layout in miniature): one row above the box, flipped below it when
+      // there is no room, both clamped into the tile
       const glyph = classes[b.cls]?.glyph ?? String(b.cls);
-      const chip = {
+      const clsChip = {
         textPx: TILE_LABEL_TEXT_PX,
         bold: true,
         bg: color,
         fg: classTextColor(b.cls),
       };
-      const size = chipSize(ctx, glyph, chip);
-      const cx = clamp(x, 0, Math.max(0, W - size.w));
-      const cy = y >= size.h ? y - size.h : y + h;
-      drawChip(ctx, glyph, chip, cx, clamp(cy, 0, Math.max(0, H - size.h)));
+      const confChip = {
+        textPx: TILE_CONF_TEXT_PX,
+        bg: "rgba(0,0,0,0.72)",
+        fg: "#fff",
+      };
+      const confText = b.conf.toFixed(2);
+      const lw = chipSize(ctx, glyph, clsChip);
+      const cw = chipSize(ctx, confText, confChip);
+      const band = Math.max(lw.h, cw.h);
+      const rowTop = y >= band ? y - band : y + h;
+      drawChip(
+        ctx, glyph, clsChip,
+        clamp(x, 0, Math.max(0, W - lw.w)),
+        clamp(rowTop + (band - lw.h) / 2, 0, Math.max(0, H - lw.h)),
+      );
+      drawChip(
+        ctx, confText, confChip,
+        clamp(x + w - cw.w, 0, Math.max(0, W - cw.w)),
+        clamp(rowTop + (band - cw.h) / 2, 0, Math.max(0, H - cw.h)),
+      );
     }
 
-    // whole-image reading on a dark chip at the tile's top-centre ("—"
-    // placeholder for a predicted background, shrunk to fit narrow crops)
-    const text = readingOf(boxes, classes) || "—";
+    // the whole-image reading on a dark chip at the tile's top-centre; a
+    // predicted background's chip reads "EMPTY" (it has no reading) as the
+    // tile's only empty label, and narrow crops shrink the chip to fit
+    const reading = readingOf(boxes, classes);
+    const text = entry.empty ? "EMPTY" : reading || "—";
     let style = {
       textPx: TILE_READING_TEXT_PX,
       mono: true,
       bg: "rgba(0,0,0,0.72)",
-      fg: entry.empty ? "#aaa" : "#fff",
+      fg: entry.empty || reading ? "#fff" : "#aaa",
     };
     let size = chipSize(ctx, text, style);
     const maxW = W - 8;
@@ -140,13 +172,12 @@
   class="tile"
   class:reject={mark === "reject"}
   class:manual={mark === "manual"}
+  style:min-width="{Math.round(180 * scale)}px"
+  style:min-height="{Math.round(110 * scale)}px"
   title="click: reject · shift-click: flag for manual adjustment"
   onclick={(e) => ontoggle(e.shiftKey)}
 >
   <canvas bind:this={cv}></canvas>
-  {#if entry.empty}
-    <span class="chip empty">PREDICTED EMPTY</span>
-  {/if}
   {#if mark === "reject"}
     <span class="chip reject-mark">REJECTED</span>
   {:else if mark === "manual"}
@@ -166,8 +197,6 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 180px;
-    min-height: 110px;
     padding: 0;
     border: 2px solid var(--edge);
     border-radius: 6px;
@@ -198,9 +227,6 @@
     background: rgba(0, 0, 0, 0.72);
     color: #fff;
     pointer-events: none;
-  }
-  .chip.empty {
-    left: 4px;
   }
   .chip.reject-mark {
     right: 4px;

@@ -7,7 +7,9 @@
    * sprinkled in at 25%) arrives whole from one `GET` and the first `size`
    * entries form the displayed batch, so the batch-size slider (1-32,
    * persisted at `localStorage` key `labeler.batch.size`) only changes how
-   * many tiles are shown — moving it never reshuffles the grid. Tiles are
+   * many tiles are shown — moving it never reshuffles the grid. The
+   * image-size ± controls scale every tile the same way (persisted at
+   * `localStorage` key `labeler.batch.tile-scale`). Tiles are
    * marked in place (plain click rejects, shift-click flags for manual
    * adjustment; the parent owns the marks) and one commit button applies the
    * whole batch: unmarked tiles are accepted as labels, marked tiles get
@@ -23,6 +25,7 @@
    * the grid is discarded.
    */
   import { onMount } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
 
   import Tile from "../lib/Tile.svelte";
   import { api } from "../lib/api";
@@ -32,15 +35,27 @@
 
   /** localStorage key of the persisted batch size. */
   const SIZE_KEY = "labeler.batch.size";
+  /** localStorage key of the persisted tile size scale. */
+  const SCALE_KEY = "labeler.batch.tile-scale";
   /** The batch-size slider's span and its default. */
   const MIN_SIZE = 1;
   const MAX_SIZE = 32;
   const DEFAULT_SIZE = 8;
+  /** The image-size scale's span, default, and step per ± click. */
+  const MIN_SCALE = 0.5;
+  const MAX_SCALE = 2.5;
+  const DEFAULT_SCALE = 1;
+  const SCALE_STEP = 1.25;
 
   let classes = $state<ClassInfo[]>([]);
   let entries = $state<BatchEntry[]>([]);
   let size = $state(DEFAULT_SIZE);
-  let marks = $state(new Map<string, TileMark>());
+  let tileScale = $state(DEFAULT_SCALE);
+  // SvelteMap, not a plain Map in $state: only plain objects and arrays are
+  // deep-proxied by $state, so Map mutations would be invisible to the count
+  // deriveds and the per-tile `mark` prop below (they would only refresh when
+  // `entries`/`size` change). SvelteMap is self-reactive (svelte/reactivity).
+  const marks = new SvelteMap<string, TileMark>();
   let busy = $state(false); // a commit request is in flight
   let reviewed = $state(0); // crops decided this session
   let skipped = $state(0); // stale prediction files the queue ignores
@@ -197,10 +212,23 @@
     pruneMarks(); // truncating the batch discards the marks it drops
   }
 
+  /** Scale every tile's image up/down one step and persist the choice. */
+  function scaleTiles(factor: number): void {
+    tileScale = Math.min(
+      MAX_SCALE,
+      Math.max(MIN_SCALE, Math.round(tileScale * factor * 100) / 100),
+    );
+    localStorage.setItem(SCALE_KEY, String(tileScale));
+  }
+
   onMount(() => {
     const stored = parseInt(localStorage.getItem(SIZE_KEY) ?? "", 10);
     if (Number.isFinite(stored)) {
       size = Math.min(MAX_SIZE, Math.max(MIN_SIZE, stored));
+    }
+    const storedScale = parseFloat(localStorage.getItem(SCALE_KEY) ?? "");
+    if (Number.isFinite(storedScale)) {
+      tileScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, storedScale));
     }
     void (async () => {
       try {
@@ -237,6 +265,11 @@
         />
         <span class="count">{size}</span>
       </label>
+      <span class="tile-size">
+        <button onclick={() => scaleTiles(1 / SCALE_STEP)}>−</button>
+        image size
+        <button onclick={() => scaleTiles(SCALE_STEP)}>+</button>
+      </span>
       <button class="accept" onclick={() => void commit()} disabled={!canCommit}>
         {commitLabel}
       </button>
@@ -254,11 +287,15 @@
 
   <main>
     {#if shown.length > 0}
-      <div class="grid">
+      <div
+        class="grid"
+        style:grid-template-columns={`repeat(auto-fill, minmax(${Math.round(210 * tileScale)}px, 1fr))`}
+      >
         {#each shown as e (e.path)}
           <Tile
             entry={e}
             {classes}
+            scale={tileScale}
             mark={marks.get(e.path) ?? ""}
             ontoggle={(manual) => toggleMark(e.path, manual)}
           />
@@ -336,6 +373,16 @@
     font-family: ui-monospace, monospace;
     color: var(--text);
   }
+  .tile-size {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--dim);
+    font-size: 12px;
+  }
+  .tile-size button {
+    padding: 2px 8px;
+  }
 
   button {
     background: #2a2e37;
@@ -367,7 +414,6 @@
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
     gap: 12px;
     justify-items: center;
   }

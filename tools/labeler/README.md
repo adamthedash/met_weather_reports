@@ -241,14 +241,18 @@ the decisions are identical in every ranking. Available rankings:
 
 The same review queue worked in batches: a grid of crops with their predicted
 boxes and whole-image predicted reading — rendered as in review (class glyph
-on a class-coloured chip, reading on a dark chip at the image's top-centre)
-at tile scale, using the tile text-size constants in
-`frontend/src/lib/labels.ts`. Tiles deliberately carry no caption. The queue
-is served **high confidence first** (the ranking above) with **empty
-predictions sprinkled in randomly at 25% of the served slots** (a target
-rate; individual batches vary naturally around it), so predicted backgrounds
-keep being confirmed at a steady rate while the high-confidence mass is
-cleared; malformed prediction files come last, in natural order.
+on a class-coloured chip plus the box's confidence on a small chip
+right-aligned at its top-right, reading on a dark chip at the image's
+top-centre) at tile scale, using the tile text-size constants in
+`frontend/src/lib/labels.ts`. Tiles deliberately carry no caption; a
+predicted empty crop's top label reads `EMPTY` (its only empty label). The
+grid's image size has `−` / `+` controls (persisted as `localStorage` key
+`labeler.batch.tile-scale`). The queue is served **high confidence first**
+(the ranking above) with **empty predictions sprinkled in randomly at 25% of
+the served slots** (a target rate; individual batches vary naturally around
+it), so predicted backgrounds keep being confirmed at a steady rate while
+the high-confidence mass is cleared; malformed prediction files come last,
+in natural order.
 
 The batch size is a slider (1-32, persisted as `localStorage` key
 `labeler.batch.size`): the grid is always the first entries of the served
@@ -480,5 +484,6 @@ stage's 25% empty-prediction sprinkle is its own queue composition
   abort startup.
 - **Box-label text sizes are constants** — `frontend/src/lib/labels.ts` holds
   `LABEL_TEXT_PX` (class chip), `CONF_TEXT_PX` (confidence chip) and
-  `READING_TEXT_PX` (the review image's top-centre reading chip); tweak and
-  rebuild.
+  `READING_TEXT_PX` (the review image's top-centre reading chip), plus the
+  batch grid's `TILE_LABEL_TEXT_PX`, `TILE_CONF_TEXT_PX` and
+  `TILE_READING_TEXT_PX`; tweak and rebuild.

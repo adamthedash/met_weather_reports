@@ -20,6 +20,9 @@ export const READING_TEXT_PX = 60;
 /** Tile class-chip text size — the batch grid's small box chips. */
 export const TILE_LABEL_TEXT_PX = 10;
 
+/** Tile confidence-chip text size — the batch grid's box confidence chips. */
+export const TILE_CONF_TEXT_PX = 9;
+
 /** Tile reading text size — the batch grid's top-centre reading chip. */
 export const TILE_READING_TEXT_PX = 16;
 
