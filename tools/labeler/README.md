@@ -177,6 +177,20 @@ the decisions are identical in every ranking. Available rankings:
   scored crop shows a `why here:` note in the sidebar; malformed label files
   skipped while counting are reported in the list response (`label_errors`)
   and counted in the header, so a corrupt file cannot silently skew rarity.
+- **fill the gaps first** — predictions that most reduce the annotation gap
+  come first. Each predicted box scores its confidence × `1/(1 + n)` where
+  `n` is its class's count of labeled boxes over `labels/` (a never-labeled
+  class weighs the most), and a crop's score is the sum over its boxes, so
+  covering several under-annotated classes — or more boxes of them —
+  outranks covering well-annotated ones. The order is built greedily: each
+  pick's boxes are counted as filled gap (the class weights shrink as if the
+  crop were accepted) before the next crop is scored, so the queue works
+  down what is still missing instead of repeating an already-covered gap.
+  Ties keep the natural order; predicted backgrounds and malformed
+  predictions come last, in natural order. Each scored crop shows a
+  `why here:` note naming the classes it fills (with box counts) and its
+  score; malformed label files skipped while counting are reported as in
+  *rare labels first*.
 
 ### audit (`/audit`)
 
@@ -268,7 +282,7 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/config.py` | `Config`: bind address, dist, dataset roots |
 | `tools/labeler/dataset.py` | `Dataset` + helpers: classes, image listing, label/prediction I/O |
 | `tools/labeler/compare.py` | model-vs-label comparison: greedy IoU pairing + disagreement issues |
-| `tools/labeler/rankings.py` | review queue rankings: pluggable presentation order (natural, rare labels) |
+| `tools/labeler/rankings.py` | review queue rankings: pluggable presentation order (natural, rare labels, gap filling) |
 | `tools/labeler/errors.py` | `ApiError` (HTTP error with a JSON-safe message) |
 | `tools/labeler/web.py` | request helpers shared by the stage routers |
 | `tools/labeler/stages/base.py` | stage seam: `Stage` contract + `summaries` |
@@ -307,8 +321,9 @@ A ranking (review queue presentation order) is one entry in
 enriched with a per-entry `rank_note` — plus the label files it skipped while
 scoring as label errors. `GET /api/review/rankings` and the review
 workspace's selector pick it up automatically; no other file changes.
-`natural_order` and `rare_labels_order` are the worked examples. Rankings
-never filter: queue membership and decisions stay identical across them.
+`natural_order`, `rare_labels_order` and `fill_gaps_order` are the worked
+examples. Rankings never filter: queue membership and decisions stay
+identical across them.
 
 ## Notes & limitations
 
