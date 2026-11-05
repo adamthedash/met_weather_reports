@@ -13,6 +13,7 @@ from tools.labeler.config import (
     DEFAULT_DATA_YAML,
     DEFAULT_IMAGES_ROOT,
     DEFAULT_LABELS_ROOT,
+    DEFAULT_MANUAL_ROOT,
     DEFAULT_PREDICTIONS_ROOT,
     FRONTEND_DIST,
     Config,
@@ -35,6 +36,12 @@ def main() -> None:
         type=Path,
         default=DEFAULT_LABELS_ROOT,
         help="output root for YOLO label files (mirrors the images tree)",
+    )
+    ap.add_argument(
+        "--manual",
+        type=Path,
+        default=DEFAULT_MANUAL_ROOT,
+        help="root of the manual-queue marker files (mirrors the images tree)",
     )
     ap.add_argument(
         "--predictions",
@@ -70,6 +77,7 @@ def main() -> None:
         dist=args.dist,
         images_root=args.images,
         labels_root=args.labels,
+        manual_root=args.manual,
         predictions_root=args.predictions,
         audit_predictions_root=args.audit_predictions,
         data_yaml=args.data_yaml,
@@ -84,6 +92,7 @@ def main() -> None:
 
     rels = ds.list_images()
     done = sum(1 for rel in rels if ds.label_path_for(rel).is_file())
+    manual = sum(1 for rel in rels if ds.is_manual(rel))
     queue, stale = ds.queue_and_stale()
     disagreements, compared = ds.audit_queue()
     dist_built = (cfg.dist / "index.html").is_file()
@@ -92,6 +101,7 @@ def main() -> None:
     print(f"  labels : {ds.labels_root}")
     print(f"  classes: {', '.join(ds.classes)} ({len(ds.classes)})")
     print(f"  done   : {done} / {len(rels)}")
+    print(f"  manual : {manual} flagged for manual adjustment")
     print(
         f"  queue  : {len(queue)} predictions to review"
         + (f" ({stale} stale)" if stale else "")

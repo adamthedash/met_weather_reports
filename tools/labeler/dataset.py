@@ -151,16 +151,21 @@ class Dataset:
     under ``labels_root``; prediction files mirror it under two roots:
     ``predictions_root`` (the bootstrap script's model output for unlabeled
     crops) and ``audit_root`` (the audit script's model output for every
-    crop, compared against the labels). Semantics shared with the
-    training pipeline:
+    crop, compared against the labels). Manual-queue markers mirror it under
+    ``manual_root``: one empty ``<stem>.txt`` per crop flagged in review as
+    needing manual adjustment (the prediction was discarded). Semantics
+    shared with the training pipeline:
 
     - label file exists (any content) → crop is done/annotated
     - empty label file → done but nothing to label (background/ignored)
     - non-empty → crop has labeled characters
+    - manual marker + no label file → crop is in the manual queue: excluded
+      from the review queue, listed first in annotate
     """
 
     images_root: Path
     labels_root: Path
+    manual_root: Path
     predictions_root: Path
     audit_root: Path
     classes: tuple[str, ...]
@@ -183,6 +188,53 @@ class Dataset:
         return safe_path(
             self.labels_root, (p.parent / (p.stem + ".txt")).as_posix()
         )
+
+    def manual_path_for(self, rel: str) -> Path:
+        """Manual-root mirror of a crop path: <stem>.txt in the same subdirs.
+
+        Same mirror convention as :meth:`label_path_for`; the file is an
+        empty marker (its existence is all that matters).
+
+        Raises:
+            ApiError: If `rel` escapes the manual root.
+        """
+        p = Path(rel)
+        return safe_path(
+            self.manual_root, (p.parent / (p.stem + ".txt")).as_posix()
+        )
+
+    def is_manual(self, rel: str) -> bool:
+        """Whether crop `rel` carries a manual-queue marker.
+
+        Raises:
+            ApiError: If `rel` escapes the manual root.
+        """
+        return self.manual_path_for(rel).is_file()
+
+    def mark_manual(self, rel: str) -> Path:
+        """Flag crop `rel` as needing manual adjustment; return the marker path.
+
+        The marker is the manual queue's membership: written by the review
+        stage's *needs manual adjustment* decision and cleared by
+        :meth:`write_labels` once the crop is annotated.
+
+        Raises:
+            ApiError: If `rel` escapes the manual root.
+        """
+        path = self.manual_path_for(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        return path
+
+    def clear_manual(self, rel: str) -> None:
+        """Remove crop `rel`'s manual-queue marker, if any (no-op when absent).
+
+        Raises:
+            ApiError: If `rel` escapes the manual root.
+        """
+        path = self.manual_path_for(rel)
+        if path.is_file():
+            path.unlink()
 
     def list_images(self) -> list[str]:
         """All crop images under the images root, relative posix paths, natural order."""
@@ -302,6 +354,11 @@ class Dataset:
     def write_labels(self, rel: str, boxes: list[Box]) -> Path:
         """Write `boxes` to the YOLO label file mirroring `rel`; return its path.
 
+        Also clears the crop's manual-queue marker: a labeled crop (including
+        an empty label — marked empty/ignored) is done and never needs manual
+        adjustment again, so the manual queue and ``labels_root`` never
+        overlap.
+
         Raises:
             ApiError: If `rel` escapes the labels root.
         """
@@ -314,6 +371,7 @@ class Dataset:
         path.write_text(
             "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
         )
+        self.clear_manual(rel)
         return path
 
     def prediction_path_for(self, rel: str) -> Path:
@@ -428,11 +486,12 @@ class Dataset:
     def queue_and_stale(self) -> tuple[list[dict[str, object]], int]:
         """Return the review queue and the number of stale prediction files.
 
-        The queue holds every crop that has a prediction file and no label
-        file, in natural order — exactly the crops the last bootstrap run
-        predicted. Prediction files whose crop is annotated or gone are stale
-        (pruned by ``scripts/bootstrap_annotations.py`` on its next run) and
-        never queue.
+        The queue holds every crop that has a prediction file, no label file,
+        and no manual-queue marker, in natural order — exactly the crops the
+        last bootstrap run predicted. Prediction files whose crop is
+        annotated, flagged for manual adjustment, or gone are stale (pruned
+        by ``scripts/bootstrap_annotations.py`` on its next run) and never
+        queue.
 
         Each entry is ``{"path", "boxes", "empty", "error"}``: `boxes` counts
         the predicted boxes (None for a malformed file), `empty` flags a
@@ -447,6 +506,8 @@ class Dataset:
         for rel in self.list_images():
             if self.label_path_for(rel).is_file():
                 continue  # already annotated (possibly since the bootstrap run)
+            if self.is_manual(rel):
+                continue  # flagged for manual adjustment: claimed by annotate
             if not self.prediction_path_for(rel).is_file():
                 continue  # no prediction for this crop
             queued.add(rel)

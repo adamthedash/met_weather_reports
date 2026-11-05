@@ -7,8 +7,11 @@ Usage:
 
 Scans ``datasets/digits/images`` for crops without a mirrored label file under
 ``datasets/digits/labels`` (the annotation tool's "not yet annotated"
-convention) and runs Ultralytics detection on them with the given weights. One
-prediction file per crop is written under ``datasets/digits/predictions``,
+convention) and runs Ultralytics detection on them with the given weights.
+Crops flagged in the annotation tool as needing manual adjustment (a marker
+under ``datasets/digits/manual``) belong to the manual queue and are skipped:
+they are labeled by hand first. One prediction file per crop is written under
+``datasets/digits/predictions``,
 mirroring the images tree: each line is ``cls cx cy w h conf`` in normalised
 0-1 coordinates (the YOLO label format plus a 6th confidence column), and a
 crop with no detections above ``--conf`` gets an empty file (a predicted
@@ -17,7 +20,10 @@ background crop).
 Prediction files are *not* valid YOLO label files (labels take exactly 5
 fields); drop the last column before promoting them into ``labels/``. The
 ``predictions`` tree is owned by this script: prediction files whose crop has
-since been annotated (or removed) are pruned on every run.
+since been annotated, flagged for manual adjustment, or removed are pruned on
+every run. The ``manual`` tree is written by the annotation tool; this script
+only prunes stale markers (whose crop is annotated or removed), so a run
+leaves every marker mirroring an unlabeled crop.
 
 Inference is lazy and batched: crops are processed in batches of
 ``--batch-size`` and each batch's prediction files are written before the next
@@ -138,37 +144,50 @@ def load_classes(yaml_path: Path) -> list[str]:
     return [names[i] for i in sorted(names)]
 
 
-def scan_dataset(dataset: Path) -> tuple[list[Path], list[Path]]:
-    """Return ``(annotated, unlabeled)`` crops under ``dataset/images``.
+def scan_dataset(dataset: Path) -> tuple[list[Path], list[Path], list[Path]]:
+    """Return ``(annotated, manual, unlabeled)`` crops under ``dataset/images``.
 
     A crop is annotated iff the mirrored label file (the image path's ``images``
     tree mapped onto the sibling ``labels`` tree with the suffix changed to
     ``.txt``) exists; an empty label file counts as annotated (an annotated
-    background crop). This is the same convention as
+    background crop). A crop is manual — flagged in the annotation tool as
+    needing manual adjustment — iff it is unlabeled and the mirrored ``manual``
+    marker exists; such crops belong to the manual queue and are never
+    predicted. This is the same convention as
     ``scripts/prepare_dataset.find_labeled_images`` and the annotation tool's
-    ``done`` flag. Both lists are sorted by path for deterministic output.
+    ``done`` flag and manual queue. All lists are sorted by path for
+    deterministic output.
 
     Args:
-        dataset: Dataset root containing the ``images`` and ``labels`` trees.
+        dataset: Dataset root containing the ``images``, ``labels`` and
+            ``manual`` trees (``manual`` may be absent — then no crop is
+            flagged).
 
     Returns:
-        ``(annotated, unlabeled)`` lists of image paths.
+        ``(annotated, manual, unlabeled)`` lists of image paths.
 
     Raises:
         ValueError: If the ``images`` or ``labels`` tree is missing.
     """
     images_root = dataset / "images"
     labels_root = dataset / "labels"
+    manual_root = dataset / "manual"
     if not images_root.is_dir():
         raise ValueError(f"images directory not found: {images_root}")
     if not labels_root.is_dir():
         raise ValueError(f"labels directory not found: {labels_root}")
     annotated: list[Path] = []
+    manual: list[Path] = []
     unlabeled: list[Path] = []
     for image in sorted(p for p in images_root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES):
         label = labels_root / image.relative_to(images_root).with_suffix(".txt")
-        (annotated if label.is_file() else unlabeled).append(image)
-    return annotated, unlabeled
+        if label.is_file():
+            annotated.append(image)
+        elif (manual_root / image.relative_to(images_root).with_suffix(".txt")).is_file():
+            manual.append(image)
+        else:
+            unlabeled.append(image)
+    return annotated, manual, unlabeled
 
 
 # ---------------------------------------------------------------------------
@@ -268,11 +287,12 @@ def write_prediction(path: Path, boxes: list[Prediction]) -> None:
 
 
 def prune_stale(predictions_root: Path, targets: list[Path], images_root: Path) -> int:
-    """Delete prediction files whose crop is annotated or gone; return the count.
+    """Delete prediction files whose crop is annotated, manual, or gone; return the count.
 
     Keeps ``predictions/`` owned by this script: after a run every prediction
-    file mirrors a currently non-annotated crop, so ``predictions/`` and
-    ``labels/`` never overlap. Only ``.txt`` files are touched.
+    file mirrors a crop predicted in this run, so ``predictions/`` never
+    overlaps ``labels/`` or the manual queue (crops excluded from `targets`,
+    e.g. flagged for manual adjustment). Only ``.txt`` files are touched.
 
     Args:
         predictions_root: The ``predictions`` tree to prune.
@@ -287,6 +307,39 @@ def prune_stale(predictions_root: Path, targets: list[Path], images_root: Path) 
     for pred in sorted(predictions_root.rglob("*.txt")):
         if pred.relative_to(predictions_root).with_suffix("").as_posix() not in keep:
             pred.unlink()
+            removed += 1
+    return removed
+
+
+def prune_manual(manual_root: Path, images_root: Path, labels_root: Path) -> int:
+    """Delete manual-queue markers whose crop is annotated or gone; return the count.
+
+    The ``manual`` tree is owned by the annotation tool (it writes and clears
+    markers as crops are flagged and labeled); this is only hygiene so a run
+    leaves every marker mirroring a currently unlabeled crop — a marker whose
+    crop was removed or labeled out of band is stale. Only ``.txt`` files are
+    touched.
+
+    Args:
+        manual_root: The ``manual`` marker tree to prune.
+        images_root: The ``images`` tree that ``manual_root`` mirrors.
+        labels_root: The ``labels`` tree that ``manual_root`` mirrors.
+
+    Returns:
+        Number of deleted files.
+    """
+    if not manual_root.is_dir():
+        return 0
+    image_stems = {
+        p.relative_to(images_root).with_suffix("").as_posix()
+        for p in images_root.rglob("*")
+        if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
+    }
+    removed = 0
+    for marker in sorted(manual_root.rglob("*.txt")):
+        rel = marker.relative_to(manual_root)
+        if rel.with_suffix("").as_posix() not in image_stems or (labels_root / rel).is_file():
+            marker.unlink()
             removed += 1
     return removed
 
@@ -339,8 +392,13 @@ def main() -> None:
         raise SystemExit(f"--batch-size must be at least 1, got {args.batch_size}")
     logger.info("model=%s dataset=%s conf=%g batch_size=%d", args.model, dataset, args.conf, args.batch_size)
 
-    annotated, targets = scan_dataset(dataset)
-    logger.info("scan: %d annotated / %d unlabeled crops", len(annotated), len(targets))
+    annotated, manual, targets = scan_dataset(dataset)
+    logger.info(
+        "scan: %d annotated / %d manual / %d unlabeled crops",
+        len(annotated),
+        len(manual),
+        len(targets),
+    )
 
     predictions_root = dataset / "predictions"
     if targets:
@@ -362,12 +420,23 @@ def main() -> None:
         logger.info("done: %d images / %d boxes -> %s", len(targets), n_boxes, predictions_root)
         print(f"{len(targets)} images / {n_boxes} boxes -> {predictions_root}")
     else:
-        logger.info("nothing to do: all %d crops are annotated", len(annotated))
-        print(f"nothing to do: all {len(annotated)} crops are annotated")
+        logger.info(
+            "nothing to do: %d annotated / %d manual, no crops to predict",
+            len(annotated),
+            len(manual),
+        )
+        print(
+            f"nothing to do: {len(annotated)} annotated / {len(manual)} manual, "
+            "no crops to predict"
+        )
     removed = prune_stale(predictions_root, targets, dataset / "images")
     if removed:
         logger.info("pruned %d stale prediction files", removed)
         print(f"pruned {removed} stale prediction files")
+    pruned_manual = prune_manual(dataset / "manual", dataset / "images", dataset / "labels")
+    if pruned_manual:
+        logger.info("pruned %d stale manual-queue markers", pruned_manual)
+        print(f"pruned {pruned_manual} stale manual-queue markers")
 
 
 if __name__ == "__main__":

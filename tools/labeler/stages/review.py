@@ -1,12 +1,17 @@
-"""The review stage: accept/reject review over the bootstrap predictions.
+"""The review stage: accept/reject/flag review over the bootstrap predictions.
 
-Per crop of the queue (crops with a prediction file and no label file):
+Per crop of the queue (crops with a prediction file and neither a label file
+nor a manual-queue marker):
 
 - **accept** promotes the prediction to a YOLO label file (confidence column
   dropped, byte-compatible with the annotate stage's writer) and deletes the
   prediction; an empty prediction accepts to an empty label (background).
 - **reject** deletes only the prediction; the crop stays non-annotated and
   returns to the manual annotate queue.
+- **needs manual adjustment** deletes the prediction and flags the crop for
+  the manual queue (a marker under the manual root), which the annotate
+  stage serves first; the prediction is discarded unparsed, so malformed
+  prediction files can be flagged too.
 
 Decisions are destructive and immediate — there is no undo. Wrong predictions
 are cheap to regenerate (``scripts/bootstrap_annotations.py``), and wrong
@@ -79,6 +84,46 @@ def decide(ds: Dataset, rel: str, accept: bool) -> dict[str, object]:
     }
 
 
+def mark_manual(ds: Dataset, rel: str) -> dict[str, object]:
+    """Flag the crop mirroring `rel` as needing manual adjustment.
+
+    The manual-queue marker is written **before** the prediction is deleted,
+    so an interrupted mark leaves the crop flagged and its prediction merely
+    ignored (counted stale by :meth:`Dataset.queue_and_stale`) instead of
+    losing the flag. The prediction is discarded without parsing, so a
+    malformed prediction file can be flagged too (unlike accept). As with
+    accept, an existing label file is never touched: the crop was annotated
+    in the meantime, so only the stale prediction is dropped and no marker is
+    written.
+
+    The decision touches only the decided crop's files — no dataset rescan.
+
+    Returns:
+        ``{ok, marked, already_annotated}`` — `marked` is False only for the
+        already-annotated outcome.
+
+    Raises:
+        ApiError: If the prediction is missing, or the crop image is missing
+            for a crop that still needs flagging.
+    """
+    pred = ds.prediction_path_for(rel)
+    if not pred.is_file():
+        raise ApiError(404, f"no such prediction: {rel}")
+    label = ds.label_path_for(rel)
+    already = label.is_file()
+    if not already:
+        image = ds.image_path(rel)
+        if not image.is_file():
+            raise ApiError(404, f"no such image: {rel}")
+        ds.mark_manual(rel)
+    pred.unlink()
+    return {
+        "ok": True,
+        "marked": not already,
+        "already_annotated": already,
+    }
+
+
 def create_stage(ds: Dataset) -> Stage:
     """Build the review stage over dataset `ds`."""
     router = APIRouter()
@@ -133,12 +178,21 @@ def create_stage(ds: Dataset) -> Stage:
             raise ApiError(400, "missing 'accept'")
         return decide(ds, rel, accept)
 
+    @router.post("/manual")
+    async def post_manual(request: Request) -> dict[str, object]:
+        """Flag one prediction's crop as needing manual adjustment."""
+        payload = await read_json_body(request)
+        rel = payload.get("path")
+        if not isinstance(rel, str):
+            raise ApiError(400, "missing 'path'")
+        return mark_manual(ds, rel)
+
     return Stage(
         id="review",
         title="review",
         description=(
-            "Accept/reject pass over bootstrap predictions; "
-            "accepts become YOLO label files."
+            "Accept/reject/flag pass over bootstrap predictions; "
+            "accepts become YOLO label files, flags join the manual queue."
         ),
         router=router,
     )

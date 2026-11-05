@@ -37,6 +37,7 @@ CLI flags (all optional):
 |---|---|---|
 | `--images` | `datasets/digits/images` | root directory of crop images |
 | `--labels` | `datasets/digits/labels` | output root for YOLO label files (mirrors the images tree) |
+| `--manual` | `datasets/digits/manual` | manual-queue marker files (mirrors the images tree) |
 | `--predictions` | `datasets/digits/predictions` | prediction files to review (mirrors the images tree) |
 | `--audit-predictions` | `datasets/digits/audit_predictions` | audit model output to compare against labels (mirrors the images tree) |
 | `--data-yaml` | `datasets/digits/data.yaml` | class names (file must exist and parse) |
@@ -51,6 +52,7 @@ datasets/digits/
 ├── data.yaml                              # classes: 0-9, dash, dot
 ├── images/<source-id>/<r>_<c>.png         # one crop per table cell
 ├── labels/<source-id>/<r>_<c>.txt         # YOLO labels (5 columns)
+├── manual/<source-id>/<r>_<c>.txt         # manual-queue marker (empty file)
 ├── predictions/<source-id>/<r>_<c>.txt    # bootstrap model output (6 columns)
 └── audit_predictions/<source-id>/<r>_<c>.txt  # audit model output (6 columns)
 ```
@@ -80,9 +82,15 @@ treats them identically):
   written by annotate's *mark empty* action, or by accepting an empty
   prediction in review
 - **non-empty** → crop has labeled characters
-- **prediction file + no label file** → in the review queue
-- **prediction file for an annotated or missing crop** → stale: ignored by the
-  queue, pruned by the next bootstrap run
+- **manual marker + no label file** → crop is in the *manual queue*: flagged
+  in review as needing manual adjustment (its prediction was discarded);
+  excluded from the review queue, served first in annotate
+- **label file written** → the manual marker is removed (a labeled crop is
+  done), so the manual queue and `labels/` never overlap
+- **prediction file + no label file and no manual marker** → in the review
+  queue
+- **prediction file for an annotated, flagged, or missing crop** → stale:
+  ignored by the queue, pruned by the next bootstrap run
 - **audit prediction file + label file** → compared by the audit stage and
   queued when the two box sets disagree; the file is deleted when the crop is
   decided
@@ -127,6 +135,13 @@ never on list position: a save can never detach the displayed annotations from
 its file. A done crop with zero boxes shows an `EMPTY` badge (hidden as soon as
 a box is drawn).
 
+Crops flagged in review as needing manual adjustment lead the queue: the
+listing serves the whole manual queue first (natural order within it, then
+everything else in natural order), so a fresh session opens the first flagged
+crop and prev/next reach every flagged crop before the backlog. A flagged crop
+on display shows a `NEEDS MANUAL` badge and the header counts what is still
+flagged; saving labels for it (including *mark empty*) clears the flag.
+
 ### review (`/review`)
 
 One keystroke per crop over the bootstrap predictions. Predicted boxes are
@@ -144,6 +159,7 @@ are tweakable constants in `frontend/src/lib/labels.ts`.
 |---|---|
 | `y` | accept: prediction becomes a label file, prediction deleted |
 | `n` | reject: prediction discarded, crop stays non-annotated |
+| `m` | needs manual adjustment: prediction discarded, crop added to the manual queue |
 | `←` `→` / `a` `d` | previous / next (no decision) |
 
 - **accept** drops the confidence column and writes the label byte-compatible
@@ -155,11 +171,19 @@ are tweakable constants in `frontend/src/lib/labels.ts`.
   dropped instead and the outcome is reported.
 - **reject** deletes only the prediction file; the crop returns to the
   annotate queue (a future bootstrap run may predict it again).
+- **needs manual adjustment** deletes only the prediction file and flags the
+  crop for the *manual queue* (an empty marker under `manual/`), which the
+  annotate stage serves first so the crop is worked by hand before the
+  backlog. The marker is written **before** the prediction is deleted, and the
+  prediction is discarded unparsed, so malformed prediction files can be
+  flagged too. A crop annotated in the meantime gets its stale prediction
+  dropped and no flag. Saving a label for a flagged crop (or marking it empty)
+  clears the flag; the next bootstrap run never predicts flagged crops.
 - Decisions are destructive and immediate — there is no undo. Wrong
   predictions are cheap to regenerate, wrong labels are cheap to fix.
 - Empty predictions show a `PREDICTED EMPTY` badge; malformed prediction files
-  are flagged with the parse error and can only be rejected or skipped, never
-  accepted.
+  are flagged with the parse error and can only be rejected, flagged for
+  manual adjustment, or skipped, never accepted.
 - Decided crops never return to the queue; stale prediction files are counted
   in the header and ignored.
 
@@ -271,7 +295,7 @@ Annotate stage (mounted at `/api/annotate`):
 
 | Route | Returns |
 |---|---|
-| `GET /api/annotate/list` | `{"images": [{path, done, has_labels}], "total", "done"}` |
+| `GET /api/annotate/list` | `{"images": [{path, done, has_labels, manual}], "total", "done", "manual"}` — entries serve `manual` crops (flagged for manual adjustment, not yet labeled) first, each group in natural path order; `manual` is the flagged count |
 | `GET /api/annotate/labels?path=` | `{"path", "boxes": [{cls, cx, cy, w, h}]}` (normalised) |
 | `POST /api/annotate/labels` | `{"path", "boxes"}` → `{"ok", "saved", "has_labels"}`; empty `boxes` marks the crop empty |
 
@@ -283,6 +307,7 @@ Review stage (mounted at `/api/review`):
 | `GET /api/review/rankings` | `{"rankings": [{id, title, description}]}` — available queue rankings |
 | `GET /api/review/prediction?path=` | `{"path", "boxes": [{cls, cx, cy, w, h, conf}]}` (normalised) |
 | `POST /api/review/decision` | `{"path", "accept": true\|false}` → `{"ok", "accepted", "saved", "already_annotated"}` |
+| `POST /api/review/manual` | `{"path"}` → `{"ok", "marked", "already_annotated"}` — needs manual adjustment: the prediction is discarded and the crop is flagged for the manual queue; `marked` is false only when the crop was annotated in the meantime (stale prediction dropped) |
 
 Audit stage (mounted at `/api/audit`):
 
@@ -308,14 +333,14 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/app.py` | ASGI app: core `/api` routes, stage routers, built frontend at `/` |
 | `tools/labeler/main.py` | CLI flags, startup summary, uvicorn bootstrap |
 | `tools/labeler/config.py` | `Config`: bind address, dist, dataset roots |
-| `tools/labeler/dataset.py` | `Dataset` + helpers: classes, image listing, label/prediction I/O |
+| `tools/labeler/dataset.py` | `Dataset` + helpers: classes, image listing, label/manual-marker/prediction I/O |
 | `tools/labeler/compare.py` | model-vs-label comparison: greedy IoU pairing + disagreement issues |
 | `tools/labeler/rankings.py` | review queue rankings: pluggable presentation order (natural, rare labels, gap filling) |
 | `tools/labeler/errors.py` | `ApiError` (HTTP error with a JSON-safe message) |
 | `tools/labeler/web.py` | request helpers shared by the stage routers |
 | `tools/labeler/stages/base.py` | stage seam: `Stage` contract + `summaries` |
 | `tools/labeler/stages/annotate.py` | annotate stage: queue listing + label I/O |
-| `tools/labeler/stages/review.py` | review stage: prediction queue + accept/reject decisions |
+| `tools/labeler/stages/review.py` | review stage: prediction queue + accept/reject/flag decisions |
 | `tools/labeler/stages/audit.py` | audit stage: disagreement queue + keep/take/discard decisions |
 | `tools/labeler/stages/summary.py` | summary stage: read-only dataset aggregate (class + per-subject distributions) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
@@ -364,6 +389,9 @@ identical across them.
   regenerate or re-annotate instead of undo).
 - **`predictions/` is owned by `scripts/bootstrap_annotations.py`** — review
   only deletes files it decides; regeneration and pruning stay in the script.
+- **`manual/` is owned by the review/annotate decisions** — review writes the
+  markers, saving a label clears them; `scripts/bootstrap_annotations.py`
+  skips flagged crops and only prunes markers whose crop is annotated or gone.
 - **`audit_predictions/` is owned by `scripts/audit_annotations.py`** — the
   audit stage only deletes files it decides; regeneration and pruning stay in
   the script, and one run is one review round.

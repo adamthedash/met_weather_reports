@@ -22,11 +22,23 @@ export type BoxN = { cls: number; cx: number; cy: number; w: number; h: number }
 /** A predicted YOLO box, normalised 0-1, with its confidence score. */
 export type PredBoxN = BoxN & { conf: number };
 
-/** One queue entry: a crop image and its labeling status. */
-export type ImageEntry = { path: string; done: boolean; has_labels: boolean };
+/** One queue entry: a crop image and its labeling status. `manual` flags the
+ *  manual queue (marked in review as needing manual adjustment, not yet
+ *  labeled); the listing serves manual entries first. */
+export type ImageEntry = {
+  path: string;
+  done: boolean;
+  has_labels: boolean;
+  manual: boolean;
+};
 
-/** The annotate queue listing. */
-export type Listing = { images: ImageEntry[]; total: number; done: number };
+/** The annotate queue listing; `manual` counts the flagged crops. */
+export type Listing = {
+  images: ImageEntry[];
+  total: number;
+  done: number;
+  manual: number;
+};
 
 /** Navigation filter over the queue (prev/next predicate, not a view). */
 export type FilterMode = "all" | "annotated" | "non-annotated";
@@ -64,6 +76,15 @@ export type DecisionResult = {
   ok: boolean;
   accepted: boolean;
   saved: number;
+  already_annotated: boolean;
+};
+
+/** Result of a needs-manual-adjustment flag (POST /api/review/manual):
+ *  `marked` is false only for the already-annotated outcome — the stale
+ *  prediction was dropped and no marker written. */
+export type ManualResult = {
+  ok: boolean;
+  marked: boolean;
   already_annotated: boolean;
 };
 

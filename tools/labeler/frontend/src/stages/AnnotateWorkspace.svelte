@@ -5,7 +5,11 @@
    * Image-pixel editing with a sticky current class, 600 ms debounced
    * autosave, 100-deep undo, view-mode filtering of prev/next
    * (all → annotated → non-annotated), and localStorage resume. Boxes live
-   * here and are edited through the shared BoxEditor.
+   * here and are edited through the shared BoxEditor. The queue is served
+   * manual-first — crops flagged in review as needing manual adjustment lead
+   * the listing, so fresh sessions and prev/next reach them before the
+   * backlog — and a flagged crop on display shows a `NEEDS MANUAL` badge
+   * until it is saved (saving clears the flag).
    */
   import { onMount } from "svelte";
 
@@ -58,8 +62,14 @@
   );
   const curIndex = $derived(curEntry ? images.indexOf(curEntry) : -1);
   const doneCount = $derived(images.filter((e) => e.done).length);
+  /** Crops still flagged for manual adjustment (the manual queue). */
+  const manualCount = $derived(images.filter((e) => e.manual).length);
   /** The crop on display is marked empty: done on disk, zero boxes now. */
   const emptyMarked = $derived(!!curEntry?.done && boxes.length === 0);
+  /** Badge for the crop on display: the manual queue flag wins over EMPTY. */
+  const badge = $derived(
+    curEntry?.manual ? "NEEDS MANUAL" : emptyMarked ? "EMPTY" : "",
+  );
 
   /** Whether listing entry `e` passes the current view mode filter. */
   function visible(e: ImageEntry): boolean {
@@ -147,6 +157,7 @@
       dirty = false;
       e.done = true;
       e.has_labels = payload.length > 0;
+      e.manual = false; // saving clears the manual-queue flag
       setStatus(
         `saved ${payload.length} box${payload.length === 1 ? "" : "es"} ✓`,
         "ok",
@@ -406,7 +417,9 @@
       <span class="spacer"></span>
       <span class="progress">
         {curIndex >= 0 ? curIndex + 1 : 0} / {images.length}
-        · done {doneCount} / {images.length}
+        · done {doneCount} / {images.length}{manualCount
+          ? ` · manual ${manualCount}`
+          : ""}
       </span>
       <span class="dirty-flag">{dirty || saveTimer ? "● unsaved" : ""}</span>
     </div>
@@ -466,7 +479,7 @@
         {zoom}
         {classes}
         {currentClass}
-        badge={emptyMarked ? "EMPTY" : ""}
+        {badge}
         onedit={onEdit}
         onstatus={setStatus}
       />

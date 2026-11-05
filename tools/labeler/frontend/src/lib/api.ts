@@ -2,7 +2,7 @@
 
 import type {
   AuditAction, AuditDecisionResult, AuditList, BoxN, CompareResult,
-  DecisionResult, Listing, PredBoxN, RankingSummary, ReviewList,
+  DecisionResult, Listing, ManualResult, PredBoxN, RankingSummary, ReviewList,
   SummaryOverview,
 } from "./types";
 
@@ -83,6 +83,15 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, accept }),
+    }),
+  /** Flag a prediction's crop as needing manual adjustment: discard the
+   *  prediction and add the crop to the manual queue (annotate serves it
+   *  first). */
+  markManual: (path: string) =>
+    fetchJSON<ManualResult>("/api/review/manual", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
     }),
 
   // -- audit stage ------------------------------------------------------

@@ -1,14 +1,16 @@
 <script lang="ts">
   /**
-   * Review workspace: the accept/reject workflow over bootstrap predictions.
+   * Review workspace: the accept/reject/flag workflow over bootstrap predictions.
    *
-   * One keystroke per crop (y/n), decision-free browsing, fit-to-window
+   * One keystroke per crop (y/n/m), decision-free browsing, fit-to-window
    * display, explicit outcome messages, and neighbour prefetch so advancing
    * after a decision paints immediately. Decisions are destructive and
    * immediate (no undo) — accept writes the label before deleting the
-   * prediction, reject only discards the prediction. The shared BoxEditor is
-   * used read-only: predictions are display-only here; wrong ones are fixed
-   * in the annotate stage after rejecting.
+   * prediction, reject only discards the prediction, and needs-adjustment
+   * discards the prediction and flags the crop for the manual queue (annotate
+   * serves flagged crops first). The shared BoxEditor is used read-only:
+   * predictions are display-only here; wrong ones are fixed in the annotate
+   * stage after rejecting.
    *
    * The queue's presentation order comes from a selectable ranking (rare
    * labels first, ...), persisted at `localStorage` key
@@ -73,7 +75,7 @@
     !curItem
       ? ""
       : curItem.error
-        ? `malformed prediction: ${curItem.error} — accept is disabled; reject discards the file`
+        ? `malformed prediction: ${curItem.error} — accept is disabled; reject discards the file, or press m to flag it for manual adjustment`
         : boxes.length === 0
           ? "predicted empty — accept marks this crop empty/ignored"
           : "",
@@ -249,6 +251,38 @@
     }
   }
 
+  /**
+   * Flag the current crop for manual adjustment and advance: the prediction
+   * is discarded (without parsing, so malformed files can be flagged too) and
+   * the crop joins the manual queue that annotate serves first.
+   */
+  async function markManual(): Promise<void> {
+    const e = curItem;
+    if (!e || busy || loading) return;
+    busy = true;
+    try {
+      const res = await api.markManual(e.path);
+      items.splice(index, 1);
+      reviewed++;
+      if (index >= items.length) index = Math.max(0, items.length - 1);
+      const msg = res.already_annotated
+        ? "crop already annotated — stale prediction dropped"
+        : "flagged for manual adjustment: prediction discarded ✓";
+      busy = false;
+      if (await loadCurrent()) setStatus(msg, "ok");
+    } catch (err) {
+      busy = false;
+      // same re-sync as decide(): the queue mirrors the files on disk
+      let msg = "flag failed: " + errMsg(err);
+      try {
+        await loadList(e.path);
+      } catch (err2) {
+        msg += " (queue reload failed: " + errMsg(err2) + ")";
+      }
+      setStatus(msg, "error");
+    }
+  }
+
   /** Move to the next/previous queued prediction without deciding. */
   async function step(delta: number): Promise<void> {
     if (busy) return;
@@ -276,7 +310,7 @@
   }
 
   // -- keys -------------------------------------------------------------
-  /** Global shortcuts: accept, reject, and decision-free browsing. */
+  /** Global shortcuts: accept, reject, flag for manual, and browsing. */
   function onKey(e: KeyboardEvent): void {
     const t = e.target as HTMLElement | null;
     if (
@@ -297,6 +331,11 @@
       case "N":
         e.preventDefault();
         if (!e.repeat) void decide(false);
+        break;
+      case "m":
+      case "M":
+        e.preventDefault();
+        if (!e.repeat) void markManual();
         break;
       case "ArrowRight":
       case "d":
@@ -371,6 +410,13 @@
         reject <kbd>n</kbd>
       </button>
       <button
+        class="manual"
+        onclick={() => void markManual()}
+        disabled={busy || loading || !curItem}
+      >
+        needs adjustment <kbd>m</kbd>
+      </button>
+      <button
         class="accept"
         onclick={() => void decide(true)}
         disabled={busy || loading || !curItem || !!curItem.error || !img}
@@ -417,6 +463,7 @@
       <ul class="help">
         <li><kbd>y</kbd><span>accept: write label, drop prediction</span></li>
         <li><kbd>n</kbd><span>reject: discard prediction</span></li>
+        <li><kbd>m</kbd><span>needs adjustment: discard prediction, flag for manual queue</span></li>
         <li><kbd>← →</kbd><span>prev / next (no decision)</span></li>
       </ul>
     </aside>
@@ -488,6 +535,10 @@
   button.reject {
     border-color: var(--error);
     color: var(--error);
+  }
+  button.manual {
+    border-color: var(--accent);
+    color: var(--accent);
   }
   .rank {
     display: flex;

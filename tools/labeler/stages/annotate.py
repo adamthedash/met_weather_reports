@@ -1,9 +1,12 @@
 """The annotate stage: manual bounding-box editing over the crop queue.
 
 Exposes the queue listing, label read/write, and validation with the response
-shapes the UI depends on: ``{path, done, has_labels}`` listing entries and the
-``{ok, saved, has_labels}`` save result. Label files are written in the strict
-YOLO on-disk format of ``tools/labeler/dataset.py``.
+shapes the UI depends on: ``{path, done, has_labels, manual}`` listing entries
+and the ``{ok, saved, has_labels}`` save result. Label files are written in
+the strict YOLO on-disk format of ``tools/labeler/dataset.py``, which also
+clears the crop's manual-queue marker (a labeled crop is done). Crops flagged
+in review as needing manual adjustment are served first, so the manual queue
+is worked before the backlog.
 """
 
 from __future__ import annotations
@@ -22,21 +25,38 @@ def create_stage(ds: Dataset) -> Stage:
 
     @router.get("/list")
     async def listing() -> dict[str, object]:
-        """Respond with every crop's path and its labeling status."""
+        """Respond with every crop's path and its labeling status.
+
+        Entries carry `manual` (flagged for manual adjustment: manual marker
+        present and not yet labeled) and are served manual-first — each group
+        in natural path order — so the manual queue is worked before the
+        backlog. The response's `manual` count is the number of flagged
+        crops.
+        """
         images: list[dict[str, object]] = []
         done = 0
+        manual = 0
         for rel in ds.list_images():
             lp = ds.label_path_for(rel)
             exists = lp.is_file()
             done += int(exists)
+            flagged = not exists and ds.is_manual(rel)
+            manual += int(flagged)
             images.append(
                 {
                     "path": rel,
                     "done": exists,
                     "has_labels": exists and lp.stat().st_size > 0,
+                    "manual": flagged,
                 }
             )
-        return {"images": images, "total": len(images), "done": done}
+        images.sort(key=lambda e: not e["manual"])  # stable: manual first
+        return {
+            "images": images,
+            "total": len(images),
+            "done": done,
+            "manual": manual,
+        }
 
     @router.get("/labels")
     async def get_labels(path: str | None = Query(default=None)) -> dict[str, object]:
@@ -46,7 +66,11 @@ def create_stage(ds: Dataset) -> Stage:
 
     @router.post("/labels")
     async def post_labels(request: Request) -> dict[str, object]:
-        """Validate and save boxes for one crop; an empty list marks it empty."""
+        """Validate and save boxes for one crop; an empty list marks it empty.
+
+        Saving clears the crop's manual-queue marker (via
+        :meth:`Dataset.write_labels`): a labeled crop is done.
+        """
         payload = await read_json_body(request)
         rel = payload.get("path")
         if not isinstance(rel, str):
