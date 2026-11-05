@@ -27,6 +27,9 @@ an annotated character-detection dataset:
    bootstrap and audit annotations at scale
    (`scripts/bootstrap_annotations.py`, `scripts/audit_annotations.py`,
    `notebooks/yolo.py`).
+5. **Recombine** the accepted per-patch labels back onto the pages with the
+   grid geometry saved in step 2, one YOLO label file per page
+   (`scripts/recombine_labels.py`).
 
 Exploratory work behind the pipeline stages lives in marimo notebooks.
 
@@ -60,7 +63,7 @@ Tools and technologies the pipeline is built on:
 | `tools/labeler/` | combined annotation web app (annotate / review / audit stages, plus a read-only dataset summary page) — details in [`tools/labeler/README.md`](tools/labeler/README.md) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built into `frontend/dist` |
 | `notebooks/` | marimo notebooks: preprocessing prototypes (`preprocess.py`, `test.py`) and YOLO training (`yolo.py`) |
-| `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata/cell patches/QC renders (`data/`), the digits dataset (`datasets/digits/`), model weights (`models/`), Ultralytics training runs (`runs/`) |
+| `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata/cell patches/QC renders/per-page labels (`data/`), the digits dataset (`datasets/digits/`), model weights (`models/`), Ultralytics training runs (`runs/`) |
 
 Pipeline scripts under `scripts/`:
 
@@ -71,6 +74,7 @@ Pipeline scripts under `scripts/`:
 | `prepare_dataset.py` | write the YOLO train/val split files |
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
 | `audit_annotations.py` | model predictions over every crop (one label-audit round) |
+| `recombine_labels.py` | map the per-patch labels back onto the page with the saved grid geometry, one YOLO label file per page |
 
 For the annotation data layout and labeler details, see
 [`tools/labeler/README.md`](tools/labeler/README.md).

@@ -17,6 +17,9 @@ bootstrap model conf="0.25" batch="32":
 audit model conf="0.25" batch="32":
     pixi run python scripts/audit_annotations.py --model {{model}} --conf {{conf}} --batch-size {{batch}}
 
+recombine:
+    pixi run python scripts/recombine_labels.py
+
 # combined labeler tool (tools/labeler): build the frontend and serve
 labeler: labeler-build
     pixi run python -m tools.labeler
