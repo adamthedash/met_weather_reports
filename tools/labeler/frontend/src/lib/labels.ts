@@ -17,6 +17,12 @@ export const CONF_TEXT_PX = 16;
 /** Whole-image reading text size — the review image's top-centre chip. */
 export const READING_TEXT_PX = 60;
 
+/** Tile class-chip text size — the batch grid's small box chips. */
+export const TILE_LABEL_TEXT_PX = 10;
+
+/** Tile reading text size — the batch grid's top-centre reading chip. */
+export const TILE_READING_TEXT_PX = 16;
+
 /** Horizontal chip padding as a fraction of the text size. */
 const PAD_X = 0.4;
 

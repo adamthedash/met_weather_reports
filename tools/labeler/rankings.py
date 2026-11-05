@@ -105,6 +105,52 @@ def rare_labels_order(
     return ordered + unscored, label_errors
 
 
+def confidence_order(
+    ds: Dataset, entries: list[dict[str, object]]
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Order the queue by its lowest predicted box confidence, highest first.
+
+    Each crop is scored by the minimum confidence of its predicted boxes —
+    a crop comes early only when *every* predicted box is confident — and the
+    queue is served most-confident first, so the bulk of safe predictions is
+    cleared before the risky ones. Crops with no parseable predicted box
+    (predicted backgrounds, malformed prediction files) come last, in natural
+    order; ties among scored crops keep the natural order too. Like
+    :func:`natural_order`, this ranking reads no label files.
+
+    Returns:
+        The ``(entries, label_errors)`` pair: the reordered entries (each
+        scored crop enriched with a ``rank_note`` naming its lowest box
+        confidence) and an empty error list.
+    """
+    scored: list[tuple[tuple[float, list[int | str]], dict[str, object]]] = []
+    unscored: list[dict[str, object]] = []
+    for entry in entries:
+        rel = str(entry["path"])
+        boxes = []
+        if entry["error"] is None and not entry["empty"]:
+            try:
+                boxes = ds.read_prediction(rel)
+            except ApiError:
+                pass  # the entry was decided or corrupted since the queue scan
+        if boxes:
+            conf = min(b["conf"] for b in boxes)
+            entry = {
+                **entry,
+                "rank_note": (
+                    f"lowest box confidence {conf:.2f} over "
+                    f"{len(boxes)} box{'es' if len(boxes) != 1 else ''}"
+                ),
+            }
+            scored.append(((-conf, natural_key(rel)), entry))
+        else:
+            unscored.append(entry)
+    scored.sort(key=lambda pair: pair[0])
+    ordered = [entry for _, entry in scored]
+    unscored.sort(key=lambda e: natural_key(str(e["path"])))
+    return ordered + unscored, []
+
+
 @dataclass(frozen=True)
 class _GapCandidate:
     """One scored queue entry with its per-class predicted box statistics.
@@ -222,6 +268,17 @@ RANKINGS: list[Ranking] = [
         title="natural order",
         description="The queue's natural path order (source page, row, column).",
         order=natural_order,
+    ),
+    Ranking(
+        id="confidence",
+        title="high confidence first",
+        description=(
+            "Predictions whose lowest-confidence box is most confident first "
+            "(a crop comes early only when every box is confident); predicted "
+            "backgrounds and malformed predictions come last. This is the "
+            "order the batch review stage builds on."
+        ),
+        order=confidence_order,
     ),
     Ranking(
         id="rare_labels",

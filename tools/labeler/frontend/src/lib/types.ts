@@ -96,6 +96,54 @@ export type ManualResult = {
   already_annotated: boolean;
 };
 
+/** One batch-review queue entry (the review queue with the prediction boxes
+ *  inlined): `boxes` is the parsed prediction (null for a malformed file),
+ *  `empty` flags a predicted background crop, `error` carries the parse
+ *  message of a malformed prediction file, and `rank_note` is the ranking's
+ *  one-line explanation of the entry's placement (null when it has none). */
+export type BatchEntry = {
+  path: string;
+  boxes: PredBoxN[] | null;
+  empty: boolean;
+  error: string | null;
+  rank_note: string | null;
+};
+
+/** The batch-review queue listing: high-confidence-first with empty
+ *  predictions sprinkled in; `total - remaining` predictions are stale. */
+export type BatchList = {
+  predictions: BatchEntry[];
+  total: number;
+  remaining: number;
+};
+
+/** The commit action of one displayed crop: accept the prediction as a
+ *  label, reject it (discard), or flag the crop for manual adjustment. */
+export type BatchAction = "accept" | "reject" | "manual";
+
+/** A tile's pending commit mark; unmarked tiles are accepted on commit. */
+export type TileMark = "" | "reject" | "manual";
+
+/** One crop's instruction in a batch commit (POST /api/batch-review/decision). */
+export type BatchDecision = { path: string; action: BatchAction };
+
+/** Per-crop result of a batch commit: `saved` counts label boxes written
+ *  (accept), `already_annotated` reports a stale prediction dropped for a
+ *  crop annotated in the meantime, and `error` is the failure message (null
+ *  on success). */
+export type BatchResult = {
+  path: string;
+  action: BatchAction;
+  ok: boolean;
+  saved: number;
+  already_annotated: boolean;
+  error: string | null;
+};
+
+/** Result of POST /api/batch-review/decision: one result per decision, in
+ *  request order; a failing crop never blocks the rest. */
+export type BatchCommitResult = { results: BatchResult[] };
+
 /** One audit-queue entry: an annotated crop whose model prediction disagrees.
  *  `label_boxes` / `pred_boxes` count each side's boxes (null for a malformed
  *  file — the side that failed is the one with the null count), `issues`

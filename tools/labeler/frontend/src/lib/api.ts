@@ -1,9 +1,9 @@
 /** Typed fetch helpers for the labeler JSON API. */
 
 import type {
-  AuditAction, AuditDecisionResult, AuditList, BoxN, ClassInfo,
-  CompareResult, DecisionResult, Listing, ManualResult, PredBoxN,
-  RankingSummary, ReviewList, SummaryOverview,
+  AuditAction, AuditDecisionResult, AuditList, BatchCommitResult,
+  BatchDecision, BatchList, BoxN, ClassInfo, CompareResult, DecisionResult,
+  Listing, ManualResult, PredBoxN, RankingSummary, ReviewList, SummaryOverview,
 } from "./types";
 
 /** Shape every API error response has (see tools/labeler/app.py). */
@@ -93,6 +93,19 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
+    }),
+
+  // -- batch review stage -----------------------------------------------
+  /** The batch-review queue: the review queue high-confidence-first with
+   *  empty predictions sprinkled in, boxes inlined per entry. */
+  batchList: () => fetchJSON<BatchList>("/api/batch-review/list"),
+  /** Commit a displayed batch: accept/reject/manual per crop, one result
+   *  per decision (a failing crop never blocks the rest). */
+  batchDecision: (decisions: BatchDecision[]) =>
+    fetchJSON<BatchCommitResult>("/api/batch-review/decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decisions }),
     }),
 
   // -- audit stage ------------------------------------------------------

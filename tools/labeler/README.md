@@ -1,9 +1,10 @@
 # labeler — combined, extensible annotation tool
 
 One application for the dataset's annotation workflows: manual bounding-box
-labeling (**annotate**), accept/reject review of bootstrap predictions
-(**review**), and model-vs-label disagreement resolution (**audit**), plus a
-read-only overview of the dataset's labeling state (**summary**). It is
+labeling (**annotate**), accept/reject review of bootstrap predictions one
+crop at a time (**review**) or in grid-sized batches (**batch review**), and
+model-vs-label disagreement resolution (**audit**), plus a read-only overview
+of the dataset's labeling state (**summary**). It is
 structured as a registry of pluggable workflow **stages**
 so new pipeline stages (triage, spot-check, merge, correction rounds) can be
 added later without touching the shared engine.
@@ -20,8 +21,8 @@ just labeler        # pnpm install + vite build, then serve on http://127.0.0.1:
 ```
 
 Open the URL in a browser (forward the port first when working over SSH).
-The top bar switches between the stages (`/annotate`, `/review`, `/audit`,
-`/summary` deep links).
+The top bar switches between the stages (`/annotate`, `/review`,
+`/batch-review`, `/audit`, `/summary` deep links).
 `Ctrl+C` stops the server.
 
 Development, in two terminals:
@@ -96,7 +97,8 @@ treats them identically):
 - **label file written** → the manual marker is removed (a labeled crop is
   done), so the manual queue and `labels/` never overlap
 - **prediction file + no label file and no manual marker** → in the review
-  queue
+  queue (worked one crop at a time in *review* or in batches in
+  *batch review*)
 - **prediction file for an annotated, flagged, or missing crop** → stale:
   ignored by the queue, pruned by the next bootstrap run
 - **audit prediction file + label file** → compared by the audit stage and
@@ -226,6 +228,57 @@ the decisions are identical in every ranking. Available rankings:
   `why here:` note naming the classes it fills (with box counts) and its
   score; malformed label files skipped while counting are reported as in
   *rare labels first*.
+- **high confidence first** — predictions whose lowest-confidence box is most
+  confident first. Each crop is scored by the minimum confidence of its
+  predicted boxes, so a crop comes early only when *every* box is confident
+  and the bulk of safe predictions is cleared before the risky ones; ties
+  keep the natural order, predicted backgrounds and malformed predictions
+  come last in natural order, and each scored crop shows a `why here:` note
+  naming its lowest box confidence. This is also the order the *batch
+  review* stage builds on.
+
+### batch review (`/batch-review`)
+
+The same review queue worked in batches: a grid of crops with their predicted
+boxes and whole-image predicted reading — rendered as in review (class glyph
+on a class-coloured chip, reading on a dark chip at the image's top-centre)
+at tile scale, using the tile text-size constants in
+`frontend/src/lib/labels.ts`. Tiles deliberately carry no caption. The queue
+is served **high confidence first** (the ranking above) with **empty
+predictions sprinkled in randomly at 25% of the served slots** (a target
+rate; individual batches vary naturally around it), so predicted backgrounds
+keep being confirmed at a steady rate while the high-confidence mass is
+cleared; malformed prediction files come last, in natural order.
+
+The batch size is a slider (1-32, persisted as `localStorage` key
+`labeler.batch.size`): the grid is always the first entries of the served
+queue, so growing the batch appends tiles and shrinking it truncates from the
+tail (pending marks on truncated tiles are discarded — nothing is written
+while marking). Mark tiles, then commit the whole batch with one button whose
+label counts the actions (e.g. `accept 6 · reject 2 · flag 1`):
+
+| Click | Action |
+|---|---|
+| plain click | mark rejected (click again to unmark) |
+| shift-click | mark needs manual adjustment (click again to unmark) |
+
+- A tile carries at most one mark; clicking with the other modifier switches
+  the mark. On commit every unmarked tile is **accept**ed and every marked
+  tile gets its marked action (**reject** / **flag**), all with the review
+  stage's exact decision semantics: accept writes the label before deleting
+  the prediction (an empty prediction accepts to an empty label, confirming
+  the crop as background/ignored), reject deletes only the prediction, and
+  flag discards the prediction and marks the crop for the manual queue.
+  Existing labels are never overwritten: a crop annotated in the meantime
+  gets its stale prediction dropped and reported.
+- The commit is one request with a per-crop result: a stale or broken crop
+  reports its error and never blocks the rest of the batch; the queue is then
+  re-synced from disk.
+- Malformed prediction tiles cannot be accepted, as in review: unmarked ones
+  are skipped and reported, and they can be rejected or flagged by clicking
+  them.
+- Decisions are destructive and immediate — there is no undo, as in review.
+  Wrong predictions are cheap to regenerate, wrong labels are cheap to fix.
 
 ### audit (`/audit`)
 
@@ -320,6 +373,13 @@ Review stage (mounted at `/api/review`):
 | `POST /api/review/decision` | `{"path", "accept": true\|false}` → `{"ok", "accepted", "saved", "already_annotated"}` |
 | `POST /api/review/manual` | `{"path"}` → `{"ok", "marked", "already_annotated"}` — needs manual adjustment: the prediction is discarded and the crop is flagged for the manual queue; `marked` is false only when the crop was annotated in the meantime (stale prediction dropped) |
 
+Batch review stage (mounted at `/api/batch-review`):
+
+| Route | Returns |
+|---|---|
+| `GET /api/batch-review/list` | `{"predictions": [{path, boxes, empty, error, rank_note}], "total", "remaining"}` — the queue with its prediction boxes inlined (`boxes` is null for a malformed file) in the stage's served order: high-confidence-first with empty predictions sprinkled in at 25% of the slots and malformed files last in natural order; `total - remaining` predictions are stale and ignored |
+| `POST /api/batch-review/decision` | `{"decisions": [{"path", "action": "accept"\|"reject"\|"manual"}]}` (1..64 distinct paths) → `{"results": [{"path", "action", "ok", "saved", "already_annotated", "error"}]}` — one result per decision in request order, each applied with the review stage's accept/reject/flag semantics; a failing crop reports `error` in its result and never blocks the rest of the batch |
+
 Audit stage (mounted at `/api/audit`):
 
 | Route | Returns |
@@ -352,10 +412,12 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/stages/base.py` | stage seam: `Stage` contract + `summaries` |
 | `tools/labeler/stages/annotate.py` | annotate stage: queue listing + label I/O |
 | `tools/labeler/stages/review.py` | review stage: prediction queue + accept/reject/flag decisions |
+| `tools/labeler/stages/batch_review.py` | batch review stage: composed batch queue + bulk accept/reject/flag commits |
 | `tools/labeler/stages/audit.py` | audit stage: disagreement queue + keep/take/discard decisions |
 | `tools/labeler/stages/summary.py` | summary stage: read-only dataset aggregate (class + per-subject distributions) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
 | `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
+| `tools/labeler/frontend/src/lib/Tile.svelte` | batch grid tile: read-only crop + predicted boxes + reading, click-to-mark chrome |
 | `tools/labeler/frontend/src/lib/labels.ts` | label text sizes (the tweakable constants), chip drawing, reading composition |
 | `tools/labeler/frontend/src/lib/` | geometry, palette, label chips, typed API client |
 | `tools/labeler/frontend/src/stages/` | workspace components + `registry.ts` (stage id → workspace) |
@@ -386,9 +448,11 @@ A ranking (review queue presentation order) is one entry in
 enriched with a per-entry `rank_note` — plus the label files it skipped while
 scoring as label errors. `GET /api/review/rankings` and the review
 workspace's selector pick it up automatically; no other file changes.
-`natural_order`, `rare_labels_order` and `fill_gaps_order` are the worked
-examples. Rankings never filter: queue membership and decisions stay
-identical across them.
+`natural_order`, `confidence_order`, `rare_labels_order` and
+`fill_gaps_order` are the worked examples. Rankings never filter: queue
+membership and decisions stay identical across them. The batch review
+stage's 25% empty-prediction sprinkle is its own queue composition
+(`stages/batch_review.py`), not a ranking behaviour.
 
 ## Notes & limitations
 
@@ -396,8 +460,8 @@ identical across them.
   SSH tunnel; do not expose the port.
 - **Axis-aligned boxes only** — YOLO format has no rotation.
 - **Single selection** in the annotate editor; crops hold only a few boxes.
-- **Review and audit decisions are irreversible** by design (cheap to
-  regenerate or re-annotate instead of undo).
+- **Review, batch review and audit decisions are irreversible** by design
+  (cheap to regenerate or re-annotate instead of undo).
 - **`predictions/` is owned by `scripts/bootstrap_annotations.py`** — review
   only deletes files it decides; regeneration and pruning stay in the script.
 - **`manual/` is owned by the review/annotate decisions** — review writes the

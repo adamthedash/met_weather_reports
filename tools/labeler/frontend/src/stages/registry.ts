@@ -7,12 +7,14 @@ import type { Component } from "svelte";
 
 import AnnotateWorkspace from "./AnnotateWorkspace.svelte";
 import AuditWorkspace from "./AuditWorkspace.svelte";
+import BatchReviewWorkspace from "./BatchReviewWorkspace.svelte";
 import ReviewWorkspace from "./ReviewWorkspace.svelte";
 import SummaryWorkspace from "./SummaryWorkspace.svelte";
 
 export const workspaces: Record<string, Component> = {
   annotate: AnnotateWorkspace,
   review: ReviewWorkspace,
+  "batch-review": BatchReviewWorkspace,
   audit: AuditWorkspace,
   summary: SummaryWorkspace,
 };
