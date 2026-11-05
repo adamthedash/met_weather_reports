@@ -16,13 +16,21 @@ used as-is: the subject id for scraped pages (``103801209``, or
 ``103801209_2`` for a subject's second page), so the ``patches/`` and ``qc/``
 folders are organised by subject id.
 
-Per-page intermediates and QC renders go to ``qc/<source-id>/``:
+Per-page intermediates, results and QC renders go to ``qc/<source-id>/``:
 
 - ``result.json`` -- the raw PaddleOCR detection result
 - ``paddle.jpg`` -- raw image with the PaddleOCR detections overlaid
 - ``cell_dist.jpg`` -- cell width/height distributions
 - ``grid_phase.jpg`` -- FFT power spectra of the box centres
 - ``inferred.jpg`` -- raw image with the inferred grid boxes overlaid
+- ``grid.json`` -- the fitted table grid and every patch's crop rectangle
+
+``grid.json`` is the machine-readable result of the table fitting: grid
+spacing and phase per axis, the kept grid lines, and -- per exported patch --
+the exact page-space rectangle it was cut from. It is what later reassembly
+uses to map per-patch inference results back onto the page. It is written
+together with the patches, so a page rejected before cropping (or one whose
+export failed) has no ``grid.json`` either.
 
 Pages are processed one at a time. A page that cannot be processed with an
 expected error (no usable cells, an unreadable image, an unwritable artifact)
@@ -103,6 +111,71 @@ class PaddleOcrResult(TypedDict):
     input_path: str
     page_index: int | None
     boxes: list[Box]
+
+
+class GridLine(TypedDict):
+    """One kept grid line of a fitted axis in ``grid.json``."""
+
+    index: int  # grid line index k
+    position: float  # line position in page pixels
+
+
+class GridImage(TypedDict):
+    """Page image identity in ``grid.json``: the coordinate space of the geometry."""
+
+    path: str  # repo-relative POSIX path, as in PaddleOcrResult.input_path
+    width_px: float
+    height_px: float
+
+
+class GridCell(TypedDict):
+    """One exported patch in ``grid.json``."""
+
+    row: int
+    col: int
+    file: str  # patch filename, "<row>_<col>.png"
+    rect: list[int]  # [left, upper, right, lower] crop rectangle in page pixels
+
+
+class GridMetadata(TypedDict):
+    """Schema of a ``qc/<source-id>/grid.json`` table-fitting result file.
+
+    All coordinates are page pixels and ``cells`` is in the export order
+    (sorted by column then row), matching ``patches/<source-id>/`` on disk.
+    Together with the patch filenames this is everything reassembly needs to
+    map per-patch inference results back onto the page.
+    """
+
+    source_id: str
+    image: GridImage
+    spacing_x: float
+    spacing_y: float
+    phase_x: float
+    phase_y: float
+    rms_x: float
+    rms_y: float
+    columns: list[GridLine]
+    rows: list[GridLine]
+    cells: list[GridCell]
+
+
+class CellPatch(NamedTuple):
+    """One exported patch: its grid cell, crop rectangle and written file."""
+
+    row: int
+    col: int
+    rect: tuple[int, int, int, int]  # [left, upper, right, lower] in page pixels
+    path: Path
+
+
+class AxisFit(NamedTuple):
+    """The fitted grid geometry of one axis, as produced by the table fitting."""
+
+    spacing: float  # grid spacing in pixels
+    phase: float  # grid phase in pixels
+    rms: float  # residual RMS in pixels
+    indices: np.ndarray  # kept grid line indices
+    lines: np.ndarray  # kept grid line positions in pixels
 
 
 class PageSummary(NamedTuple):
@@ -567,7 +640,7 @@ def build_grid_boxes(
 
 def export_cell_patches(
     boxes: pl.DataFrame, image_path: Path, out_dir: Path, expand: float = EXPAND
-) -> list[Path]:
+) -> list[CellPatch]:
     """Crop and save an image patch for every cell box.
 
     Each box is expanded by ``expand`` of its size on every side (10% per
@@ -584,7 +657,10 @@ def export_cell_patches(
         expand: Relative padding added on every side of a box.
 
     Returns:
-        The list of written patch paths.
+        One ``CellPatch`` per written file: the grid cell's ``row``/``col``,
+        the exact crop rectangle used (``expand`` padding applied, rounded
+        outward, clipped to the image bounds) and the written path, in
+        ``boxes`` iteration order (sorted by column then row).
 
     Raises:
         ValueError: If ``expand`` is negative.
@@ -593,7 +669,7 @@ def export_cell_patches(
         raise ValueError("expand must be non-negative")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    written: list[Path] = []
+    written: list[CellPatch] = []
     with Image.open(image_path) as img:
         for cell in boxes.iter_rows(named=True):
             pad_x: float = expand * float(cell["box_width"])
@@ -605,8 +681,90 @@ def export_cell_patches(
             patch: Image.Image = img.crop((left, upper, right, lower))
             out_path: Path = out_dir / f"{cell['row']}_{cell['col']}.png"
             patch.save(out_path)
-            written.append(out_path)
+            written.append(
+                CellPatch(
+                    row=int(cell["row"]),
+                    col=int(cell["col"]),
+                    rect=(left, upper, right, lower),
+                    path=out_path,
+                )
+            )
     return written
+
+
+def build_grid_metadata(
+    source_id: str,
+    image_path: Path,
+    width_px: float,
+    height_px: float,
+    fit_x: AxisFit,
+    fit_y: AxisFit,
+    patches: list[CellPatch],
+) -> GridMetadata:
+    """Assemble one page's table-fitting results in the ``GridMetadata`` schema.
+
+    The metadata captures what the patch files alone cannot: where the fitted
+    grid sits on the page and, per exported patch, the exact rectangle it was
+    cropped from. Together with the patch filenames (``<row>_<col>.png``, the
+    same names the inference outputs mirror) this is everything reassembly
+    needs to map per-patch results back onto the page.
+
+    Args:
+        source_id: The page's ``<source-id>`` (its image file stem).
+        image_path: Page image the grid was fitted on.
+        width_px: Page image width in pixels.
+        height_px: Page image height in pixels.
+        fit_x: Fitted grid geometry of the x axis.
+        fit_y: Fitted grid geometry of the y axis.
+        patches: Exported patch records from ``export_cell_patches``, in
+            column-then-row order.
+
+    Returns:
+        The page's ``GridMetadata``: plain Python numbers throughout
+        (JSON-serialisable), ``cells`` in ``patches`` order.
+    """
+    return GridMetadata(
+        source_id=source_id,
+        image=GridImage(
+            path=repo_relative(image_path),
+            width_px=width_px,
+            height_px=height_px,
+        ),
+        spacing_x=fit_x.spacing,
+        spacing_y=fit_y.spacing,
+        phase_x=fit_x.phase,
+        phase_y=fit_y.phase,
+        rms_x=fit_x.rms,
+        rms_y=fit_y.rms,
+        columns=[
+            GridLine(index=int(index), position=float(line))
+            for index, line in zip(fit_x.indices, fit_x.lines)
+        ],
+        rows=[
+            GridLine(index=int(index), position=float(line))
+            for index, line in zip(fit_y.indices, fit_y.lines)
+        ],
+        cells=[
+            GridCell(
+                row=patch.row,
+                col=patch.col,
+                file=patch.path.name,
+                rect=list(patch.rect),
+            )
+            for patch in patches
+        ],
+    )
+
+
+def write_grid_json(metadata: GridMetadata, path: Path) -> None:
+    """Write ``metadata`` to ``path`` as pretty-printed JSON with a trailing newline.
+
+    Args:
+        metadata: Page table-fitting results in the ``GridMetadata`` schema.
+        path: Destination file; the parent directory is created as needed.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -902,7 +1060,10 @@ def process_page(
 
     Writes ``patches/<source-id>/<row>_<col>.png`` and the QC folder
     ``qc/<source-id>/`` (``result.json``, ``paddle.jpg``, ``cell_dist.jpg``,
-    ``grid_phase.jpg``, ``inferred.jpg``).
+    ``grid_phase.jpg``, ``inferred.jpg``, ``grid.json``). ``grid.json`` holds
+    the table-fitting results and is written after the patches are exported,
+    so it always describes the patch set on disk; a page rejected by the
+    minimum-grid check writes neither.
 
     Args:
         model: The shared ``TableCellsDetection`` model instance.
@@ -1021,9 +1182,21 @@ def process_page(
             f"(need at least {MIN_GRID_COLS} cols x {MIN_GRID_ROWS} rows)"
         )
 
-    patch_paths: list[Path] = export_cell_patches(
+    patches: list[CellPatch] = export_cell_patches(
         grid_boxes, image_path, patches_root / source_id
     )
+
+    metadata: GridMetadata = build_grid_metadata(
+        source_id,
+        image_path,
+        width_px,
+        height_px,
+        fit_x=AxisFit(spacing_x, phase_x, rms_x, k_x_kept, grid_x_lines),
+        fit_y=AxisFit(spacing_y, phase_y, rms_y, k_y_kept, grid_y_lines),
+        patches=patches,
+    )
+    write_grid_json(metadata, qc_dir / "grid.json")
+    logger.debug("%s: wrote %s", source_id, repo_relative(qc_dir / "grid.json"))
 
     return PageSummary(
         source_id=source_id,
@@ -1033,7 +1206,7 @@ def process_page(
         spacing_y=spacing_y,
         rms_x=rms_x,
         rms_y=rms_y,
-        n_patches=len(patch_paths),
+        n_patches=len(patches),
     )
 
 
