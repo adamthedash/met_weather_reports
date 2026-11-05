@@ -247,7 +247,8 @@ top-centre) at tile scale, using the tile text-size constants in
 `frontend/src/lib/labels.ts`. Tiles deliberately carry no caption; a
 predicted empty crop's top label reads `EMPTY` (its only empty label). The
 grid's image size has `−` / `+` controls (persisted as `localStorage` key
-`labeler.batch.tile-scale`). The queue is served **high confidence first**
+`labeler.batch.tile-scale`), steppable with the `[` / `]` hotkeys. The queue
+is served **high confidence first**
 (the ranking above) with **empty predictions sprinkled in randomly at 25% of
 the served slots** (a target rate; individual batches vary naturally around
 it), so predicted backgrounds keep being confirmed at a steady rate while
@@ -265,6 +266,13 @@ label counts the actions (e.g. `accept 6 · reject 2 · flag 1`):
 |---|---|
 | plain click | mark rejected (click again to unmark) |
 | shift-click | mark needs manual adjustment (click again to unmark) |
+
+One keystroke per action:
+
+| Key | Action |
+|---|---|
+| `y` | commit the batch (same as the accept button; no repeat) |
+| `[` / `]` | image size down / up (repeats while held) |
 
 - A tile carries at most one mark; clicking with the other modifier switches
   the mark. On commit every unmarked tile is **accept**ed and every marked

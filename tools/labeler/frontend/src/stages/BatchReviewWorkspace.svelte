@@ -23,6 +23,11 @@
    * compose reshuffles the remaining empties). Marks belong to the displayed
    * grid — nothing is written while marking — so a mark whose tile leaves
    * the grid is discarded.
+   *
+   * Keyboard aliases for the header buttons (as in annotate/review): `[` / `]`
+   * step the image size down/up (repeat while held, like annotate's zoom) and
+   * `y` commits the batch (review's accept key; no repeat — a held key must
+   * not fire a second destructive commit).
    */
   import { onMount } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
@@ -221,6 +226,41 @@
     localStorage.setItem(SCALE_KEY, String(tileScale));
   }
 
+  /**
+   * Global shortcuts: `[` / `]` for the image-size controls, `y` for the
+   * commit button (review's accept key). Keystrokes aimed at form controls
+   * (the batch-size slider) and browser shortcuts (ctrl/meta) pass through;
+   * `y` never repeats — a held key must not fire a second destructive commit
+   * while the first is in flight — while the zoom keys repeat freely like
+   * annotate's.
+   */
+  function onKey(e: KeyboardEvent): void {
+    const t = e.target as HTMLElement | null;
+    if (
+      t &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")
+    ) {
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) return;
+
+    switch (e.key) {
+      case "[":
+        e.preventDefault();
+        scaleTiles(1 / SCALE_STEP);
+        break;
+      case "]":
+        e.preventDefault();
+        scaleTiles(SCALE_STEP);
+        break;
+      case "y":
+      case "Y":
+        e.preventDefault();
+        if (!e.repeat) void commit();
+        break;
+    }
+  }
+
   onMount(() => {
     const stored = parseInt(localStorage.getItem(SIZE_KEY) ?? "", 10);
     if (Number.isFinite(stored)) {
@@ -266,15 +306,17 @@
         <span class="count">{size}</span>
       </label>
       <span class="tile-size">
-        <button onclick={() => scaleTiles(1 / SCALE_STEP)}>−</button>
+        <button onclick={() => scaleTiles(1 / SCALE_STEP)}>− <kbd>[</kbd></button>
         image size
-        <button onclick={() => scaleTiles(SCALE_STEP)}>+</button>
+        <button onclick={() => scaleTiles(SCALE_STEP)}>+ <kbd>]</kbd></button>
       </span>
       <button class="accept" onclick={() => void commit()} disabled={!canCommit}>
-        {commitLabel}
+        {commitLabel} <kbd>y</kbd>
       </button>
       <span class="spacer"></span>
-      <span class="hint">click: reject · shift-click: flag for manual</span>
+      <span class="hint">
+        <kbd>y</kbd>: commit · click: reject · shift-click: flag for manual
+      </span>
       <span
         class="status"
         class:ok={status.kind === "ok"}
@@ -310,6 +352,8 @@
     {/if}
   </main>
 </div>
+
+<svelte:window onkeydown={onKey} />
 
 <style>
   .workspace {
@@ -403,6 +447,15 @@
   button.accept {
     border-color: var(--ok);
     color: var(--ok);
+  }
+  kbd {
+    background: #2a2e37;
+    border: 1px solid var(--edge);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0 5px;
+    font: 11px ui-monospace, monospace;
+    color: var(--dim);
   }
 
   main {
