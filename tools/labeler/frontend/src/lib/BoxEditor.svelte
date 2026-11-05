@@ -9,11 +9,19 @@
    * In `readonly` mode (used by the review workspace) gestures are disabled
    * and the canvas is display-only. Boxes with `source: "pred"` are stroked
    * dashed so the audit workspace can overlay predictions on annotations.
+   * Box labels render in one of two styles: `labelStyle: "plain"` keeps
+   * annotate's compact single tag; `"prominent"` (review/audit) draws the
+   * class on a large class-coloured chip with contrast-picked text plus the
+   * confidence on a separate small chip at the box's top-right (text sizes
+   * are tweakable constants in `labels.ts`).
    */
   import {
     clamp, handlePoints, hitBox, hitHandle, type Pt,
   } from "./boxes";
-  import { classColor } from "./palette";
+  import {
+    CONF_TEXT_PX, LABEL_TEXT_PX, chipSize, drawChip,
+  } from "./labels";
+  import { classColor, classTextColor } from "./palette";
   import type { Box } from "./types";
 
   type OpBase = { start: Pt; moved: boolean };
@@ -30,6 +38,7 @@
     classes,
     currentClass = null,
     readonly = false,
+    labelStyle = "plain",
     badge = "",
     onedit = () => {},
     onstatus = () => {},
@@ -41,6 +50,11 @@
     classes: string[];
     currentClass?: number | null;
     readonly?: boolean;
+    /** Box-label rendering: "plain" keeps annotate's compact single tag;
+     *  "prominent" (review/audit) draws the class on a large class-coloured
+     *  chip and the confidence on a separate small chip at the box's
+     *  top-right. */
+    labelStyle?: "plain" | "prominent";
     /** Fixed-size badge text drawn in the image's top-left corner (e.g.
      *  "EMPTY", "PREDICTED EMPTY"); hidden when empty. */
     badge?: string;
@@ -201,7 +215,70 @@
     }
   }
 
-  /** Draw the image and its boxes (class tags, handles, EMPTY badge). */
+  /**
+   * Prominent label chips of one box (review/audit). The class name goes on
+   * a chip in the class colour with contrast-picked text; a prediction box
+   * additionally gets its bare confidence on a separate neutral chip,
+   * right-aligned on the same row. The row sits above the box and flips
+   * below it when there is no room; a box too narrow for both chips wraps
+   * the confidence chip to a second row beside the class chip. Chips are
+   * clamped into the image. All geometry arguments are screen px.
+   */
+  function drawBoxChips(
+    ctx: CanvasRenderingContext2D,
+    b: Box,
+    name: string,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    iw: number,
+    ih: number,
+  ): void {
+    const GAP = 2; // px between the two chips and between wrapped rows
+    const clsChip = {
+      textPx: LABEL_TEXT_PX,
+      bold: true,
+      bg: classColor(b.cls),
+      fg: classTextColor(b.cls),
+    };
+    const confText = b.conf !== undefined ? b.conf.toFixed(2) : null;
+    const confChip = { textPx: CONF_TEXT_PX, bg: "rgba(0,0,0,0.72)", fg: "#fff" };
+
+    const lw = chipSize(ctx, name, clsChip);
+    const cw = confText !== null ? chipSize(ctx, confText, confChip) : null;
+    const cwW = cw?.w ?? 0;
+    const cwH = cw?.h ?? 0;
+
+    const wrap = cw !== null && lw.w + cwW + GAP > w;
+    const band = wrap ? lw.h + cwH + GAP : Math.max(lw.h, cwH);
+    const above = y >= band;
+
+    let clsY: number;
+    let confY: number;
+    if (wrap) {
+      // class chip next to the box, confidence chip beyond it
+      clsY = above ? y - lw.h : y + h;
+      confY = above ? clsY - GAP - cwH : clsY + lw.h + GAP;
+    } else {
+      // one shared row, both chips centred in it
+      const rowTop = above ? y - band : y + h;
+      clsY = rowTop + (band - lw.h) / 2;
+      confY = rowTop + (band - cwH) / 2;
+    }
+    clsY = clamp(clsY, 0, Math.max(0, ih - lw.h));
+
+    drawChip(ctx, name, clsChip, clamp(x, 0, Math.max(0, iw - lw.w)), clsY);
+    if (confText !== null && cw) {
+      drawChip(
+        ctx, confText, confChip,
+        clamp(x + w - cwW, 0, Math.max(0, iw - cwW)),
+        clamp(confY, 0, Math.max(0, ih - cwH)),
+      );
+    }
+  }
+
+  /** Draw the image and its boxes (label chips, handles, corner badge). */
   function render(): void {
     const ctx = cv.getContext("2d");
     if (!ctx) return;
@@ -236,14 +313,19 @@
       ctx.setLineDash([]);
 
       const name = classes[b.cls] ?? String(b.cls);
-      const tag = b.conf !== undefined ? `${name} ${b.conf.toFixed(2)}` : name;
-      ctx.font = "12px system-ui, sans-serif";
-      const tw = ctx.measureText(tag).width;
-      const ty = y >= 16 ? y - 15 : y + h;
-      ctx.fillStyle = "rgba(0,0,0,0.72)";
-      ctx.fillRect(x, ty, tw + 8, 15);
-      ctx.fillStyle = "#fff";
-      ctx.fillText(tag, x + 4, ty + 11.5);
+      if (labelStyle === "prominent") {
+        drawBoxChips(ctx, b, name, x, y, w, h, W, H);
+      } else {
+        // annotate's compact tag: class and confidence in one small chip
+        const tag = b.conf !== undefined ? `${name} ${b.conf.toFixed(2)}` : name;
+        ctx.font = "12px system-ui, sans-serif";
+        const tw = ctx.measureText(tag).width;
+        const ty = y >= 16 ? y - 15 : y + h;
+        ctx.fillStyle = "rgba(0,0,0,0.72)";
+        ctx.fillRect(x, ty, tw + 8, 15);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(tag, x + 4, ty + 11.5);
+      }
 
       if (sel) {
         ctx.fillStyle = color;
@@ -255,14 +337,13 @@
 
     // fixed-size badge in the image's top-left corner ("EMPTY" for crops that
     // are done but hold no boxes, "PREDICTED EMPTY" for predicted background);
-    // drawn after the boxes so it stays on top
+    // drawn after the boxes so it stays on top. Keeps its historical 12px
+    // sizing (explicit padding): it is not a box label.
     if (badge) {
-      ctx.font = "12px system-ui, sans-serif";
-      const tw = ctx.measureText(badge).width;
-      ctx.fillStyle = "rgba(0,0,0,0.72)";
-      ctx.fillRect(6, 6, tw + 8, 15);
-      ctx.fillStyle = "#fff";
-      ctx.fillText(badge, 10, 17.5);
+      drawChip(ctx, badge, {
+        textPx: 12, bg: "rgba(0,0,0,0.72)", fg: "#fff",
+        padX: 4, padY: 1.5,
+      }, 6, 6);
     }
   }
 

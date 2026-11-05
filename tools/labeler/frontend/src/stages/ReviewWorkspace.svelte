@@ -374,7 +374,16 @@
 
   <main>
     <div class="canvas-wrap" bind:this={wrapEl}>
-      <BoxEditor image={img} bind:boxes bind:selected {zoom} {classes} {badge} readonly />
+      <BoxEditor
+        image={img}
+        bind:boxes
+        bind:selected
+        {zoom}
+        {classes}
+        {badge}
+        labelStyle="prominent"
+        readonly
+      />
     </div>
     <aside>
       <h3>prediction</h3>

@@ -129,8 +129,11 @@ a box is drawn).
 ### review (`/review`)
 
 One keystroke per crop over the bootstrap predictions. Predicted boxes are
-display-only here (tagged with class and confidence); wrong predictions are
-rejected and fixed in the annotate stage.
+display-only here: every box is tagged with its class on a large chip in the
+box's class colour (text colour picked for contrast against it) and the
+confidence on a separate smaller chip right-aligned at the box's top-right;
+wrong predictions are rejected and fixed in the annotate stage. The chip text
+sizes are tweakable constants in `frontend/src/lib/labels.ts`.
 
 | Key | Action |
 |---|---|
@@ -177,8 +180,10 @@ Find incorrect labels by comparing them against a model's predictions: run
 `just audit <model>` (`scripts/audit_annotations.py`) over the dataset, then
 resolve every disagreement here. The crop renders twice side by side —
 annotations on the left, model predictions on the right, each badged with
-its side (an empty side shows "(EMPTY)") — with the prediction confidences
-and a plain-words issue list in the sidebar. One keystroke per crop:
+its side (an empty side shows "(EMPTY)") — with boxes tagged as in review
+(class on a large class-coloured chip, prediction confidences on a separate
+chip at the box's top-right) and a plain-words issue list in the sidebar.
+One keystroke per crop:
 
 | Key | Action |
 |---|---|
@@ -268,7 +273,8 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/stages/audit.py` | audit stage: disagreement queue + keep/take/discard decisions |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
 | `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
-| `tools/labeler/frontend/src/lib/` | geometry, palette, typed API client |
+| `tools/labeler/frontend/src/lib/labels.ts` | box-label chip text sizes (the tweakable constants) and chip drawing |
+| `tools/labeler/frontend/src/lib/` | geometry, palette, label chips, typed API client |
 | `tools/labeler/frontend/src/stages/` | workspace components + `registry.ts` (stage id → workspace) |
 
 ## Toolchains
@@ -315,3 +321,6 @@ never filter: queue membership and decisions stay identical across them.
   the script, and one run is one review round.
 - **Class set is data-driven** — editing `data.yaml` names changes the palette
   and keyboard map on the next load; ids must stay contiguous from 0.
+- **Box-label text sizes are constants** — `frontend/src/lib/labels.ts` holds
+  `LABEL_TEXT_PX` (class chip) and `CONF_TEXT_PX` (confidence chip); tweak and
+  rebuild.

@@ -345,6 +345,7 @@
         {zoom}
         {classes}
         badge={labelBadge}
+        labelStyle="prominent"
         readonly
       />
       <BoxEditor
@@ -353,6 +354,7 @@
         {zoom}
         {classes}
         badge={predBadge}
+        labelStyle="prominent"
         readonly
       />
     </div>
