@@ -102,6 +102,46 @@ def setup_logging(level_name: str, log_file: Path) -> None:
 # dataset helpers
 
 
+class _StrictLoader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` that rejects duplicate mapping keys.
+
+    PyYAML silently keeps the last of duplicate keys, which would quietly
+    drop or renumber a class; strict parsing must reject the file instead.
+    """
+
+
+def _construct_mapping_strict(
+    loader: _StrictLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[object, object]:
+    """Mapping constructor that raises on a duplicate key (see :class:`_StrictLoader`)."""
+    mapping: dict[object, object] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:  # unhashable key
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"unhashable key {key!r}",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_strict
+)
+
+
 def load_classes(yaml_path: Path) -> list[str]:
     """Read class names from the int-keyed ``names:`` mapping of a YOLO data.yaml.
 
@@ -115,14 +155,15 @@ def load_classes(yaml_path: Path) -> list[str]:
         Class names indexed by class id.
 
     Raises:
-        ValueError: If the file is missing, is not valid YAML, or has no
-            usable ``names:`` mapping (non-mapping or empty, non-integer or
-            duplicate keys, non-string names).
+        ValueError: If the file is missing, is not valid YAML (including a
+            duplicate mapping key), or has no usable ``names:`` mapping
+            (non-mapping or empty, non-integer or duplicate keys,
+            non-string names).
     """
     if not yaml_path.is_file():
         raise ValueError(f"data.yaml not found: {yaml_path}")
     try:
-        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        data = yaml.load(yaml_path.read_text(encoding="utf-8"), Loader=_StrictLoader)
     except yaml.YAMLError as exc:
         raise ValueError(f"{yaml_path}: invalid YAML: {exc}") from exc
     raw = data.get("names") if isinstance(data, dict) else None

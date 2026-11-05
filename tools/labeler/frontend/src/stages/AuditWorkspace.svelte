@@ -20,10 +20,10 @@
   import { fromNormalized } from "../lib/boxes";
   import { classColor } from "../lib/palette";
   import type {
-    AuditAction, AuditEntry, AuditIssue, Box, CompareResult,
+    AuditAction, AuditEntry, AuditIssue, Box, ClassInfo, CompareResult,
   } from "../lib/types";
 
-  let classes = $state<string[]>([]);
+  let classes = $state<ClassInfo[]>([]);
   let items = $state<AuditEntry[]>([]);
   let compared = $state(0);
   let index = $state(0);
@@ -82,7 +82,7 @@
 
   /** Class display name, falling back to the bare class id. */
   function clsName(cls: number): string {
-    return classes[cls] ?? String(cls);
+    return classes[cls]?.name ?? String(cls);
   }
 
   /** Plain-words description of one disagreement (indices match the lists). */
@@ -364,7 +364,7 @@
         {#each labelBoxes as b, i (i)}
           <li>
             <span class="swatch" style={`background: ${classColor(b.cls)}`}></span>
-            <span>{classes[b.cls] ?? String(b.cls)}</span>
+            <span>{classes[b.cls]?.name ?? String(b.cls)}</span>
             <small>#{i}</small>
           </li>
         {/each}
@@ -374,7 +374,7 @@
         {#each predBoxes as b, i (i)}
           <li>
             <span class="swatch" style={`background: ${classColor(b.cls)}`}></span>
-            <span>{classes[b.cls] ?? String(b.cls)}</span>
+            <span>{classes[b.cls]?.name ?? String(b.cls)}</span>
             <small>conf {b.conf?.toFixed(2)} #{i}</small>
           </li>
         {/each}

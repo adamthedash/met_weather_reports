@@ -16,8 +16,8 @@
   import BoxEditor from "../lib/BoxEditor.svelte";
   import { api, loadImage } from "../lib/api";
   import { fromNormalized, toNormalized } from "../lib/boxes";
-  import { buildShortcutMap, classColor, shortcutFor } from "../lib/palette";
-  import type { Box, FilterMode, ImageEntry } from "../lib/types";
+  import { classColor } from "../lib/palette";
+  import type { Box, ClassInfo, FilterMode, ImageEntry } from "../lib/types";
 
   const FILTER_CYCLE: Record<FilterMode, FilterMode> = {
     all: "annotated",
@@ -37,7 +37,7 @@
       : "all";
   }
 
-  let classes = $state<string[]>([]);
+  let classes = $state<ClassInfo[]>([]);
   let shortcutMap: Record<string, number> = {};
   let images = $state<ImageEntry[]>([]);
   let filterMode = $state<FilterMode>(loadFilterMode());
@@ -74,6 +74,13 @@
   const badge = $derived(
     curEntry?.manual ? "NEEDS MANUAL" : emptyMarked ? "EMPTY" : "",
   );
+  /** The class keys bound in this dataset (for the keys cheat-sheet). */
+  const classKeys = $derived(
+    classes
+      .map((c) => c.key)
+      .filter((k): k is string => k !== null)
+      .join(" ") || "—",
+  );
 
   /** Whether listing entry `e` passes the current view mode filter. */
   function visible(e: ImageEntry): boolean {
@@ -103,7 +110,12 @@
   async function loadList(): Promise<void> {
     const [cls, listing] = await Promise.all([api.classes(), api.list()]);
     classes = cls.classes;
-    shortcutMap = buildShortcutMap(classes);
+    // class keys come from the dataset's classes.yaml (validated server-side
+    // to be unique and free of labeler action keys)
+    shortcutMap = {};
+    classes.forEach((c, i) => {
+      if (c.key !== null) shortcutMap[c.key] = i;
+    });
     images = listing.images;
     const last = localStorage.getItem("labeler.annotate.lastPath");
     const restored =
@@ -306,7 +318,7 @@
       sel.cls = cls;
       dirty = true;
       scheduleSave();
-      setStatus(`box set to "${classes[cls]}"`);
+      setStatus(`box set to "${classes[cls]?.name ?? String(cls)}"`);
     }
   }
 
@@ -348,7 +360,9 @@
       return;
     }
 
-    if ((e.key >= "0" && e.key <= "9") || e.key === "." || e.key === "-") {
+    // class keys (from classes.yaml) fire before the action keys; startup
+    // validation guarantees they never collide
+    if (e.key in shortcutMap) {
       e.preventDefault();
       assignClassByShortcut(e.key);
       return;
@@ -372,15 +386,15 @@
         });
         break;
       case "Backspace":
+        e.preventDefault();
+        void markEmpty();
+        break;
       case "Delete":
         e.preventDefault();
         deleteSelected();
         break;
       case "z":
         undo();
-        break;
-      case "x":
-        void markEmpty();
         break;
       case "f":
         void cycleFilter();
@@ -441,11 +455,11 @@
         save &amp; next <kbd>⏎</kbd>
       </button>
       <button onclick={() => void markEmpty()} disabled={!curEntry}>
-        mark empty <kbd>x</kbd>
+        mark empty <kbd>⌫</kbd>
       </button>
       <button onclick={undo}>undo <kbd>z</kbd></button>
       <button onclick={deleteSelected} disabled={selected < 0}>
-        delete box <kbd>⌫</kbd>
+        delete box <kbd>Del</kbd>
       </button>
       <button class:on={filterMode !== "all"} onclick={() => void cycleFilter()}>
         view: {filterMode} <kbd>f</kbd>
@@ -459,7 +473,7 @@
       </span>
     </div>
     <div class="row palette">
-      {#each classes as name, i (i)}
+      {#each classes as cls, i (i)}
         <button
           class="chip"
           class:on={currentClass === i}
@@ -467,8 +481,8 @@
           onclick={() => assignClass(i)}
         >
           <span class="sw" style={`background: ${classColor(i)}`}></span>
-          {name}
-          {#if shortcutFor(name)}<kbd>{shortcutFor(name)}</kbd>{/if}
+          {cls.name}
+          {#if cls.key !== null}<kbd>{cls.key}</kbd>{/if}
         </button>
       {/each}
     </div>
@@ -496,7 +510,7 @@
           <li class:sel={i === selected}>
             <button class="row" onclick={() => (selected = i)}>
               <span class="swatch" style={`background: ${classColor(b.cls)}`}></span>
-              <span>{classes[b.cls] ?? String(b.cls)}</span>
+              <span>{classes[b.cls]?.name ?? String(b.cls)}</span>
               <small>
                 {Math.round(b.x)},{Math.round(b.y)} · {Math.round(b.w)}×{Math.round(b.h)}
               </small>
@@ -516,10 +530,11 @@
         <li><kbd>drag box</kbd><span>move (selected box only)</span></li>
         <li><kbd>drag handle</kbd><span>resize selected box</span></li>
         <li><kbd>right-click</kbd><span>delete box</span></li>
-        <li><kbd>0-9 . -</kbd><span>class (selected box + current)</span></li>
+        <li><kbd>{classKeys}</kbd><span>class (selected box + current)</span></li>
         <li><kbd>← → / a d</kbd><span>prev / next crop</span></li>
         <li><kbd>⏎</kbd><span>save &amp; next</span></li>
-        <li><kbd>x</kbd><span>mark empty / ignored</span></li>
+        <li><kbd>⌫</kbd><span>mark empty / ignored</span></li>
+        <li><kbd>Del</kbd><span>delete selected box</span></li>
         <li><kbd>z</kbd><span>undo</span></li>
         <li><kbd>esc</kbd><span>deselect / cancel drag</span></li>
         <li><kbd>ctrl+s</kbd><span>save now</span></li>

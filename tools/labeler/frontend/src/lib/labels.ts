@@ -6,8 +6,7 @@
  * the text size, so one knob keeps the chip proportions. Sizes are screen CSS
  * px and do not scale with the crop's zoom.
  */
-import { classGlyph } from "./palette";
-import type { Box } from "./types";
+import type { Box, ClassInfo } from "./types";
 
 /** Class-label chip text size — the bold chip on every box. */
 export const LABEL_TEXT_PX = 22;
@@ -85,18 +84,16 @@ export function drawChip(
 }
 
 /**
- * Whole-image predicted reading of a box set: each box's class glyph (via
- * `classGlyph`, so "dot" renders "." and "dash" renders "-") concatenated in
- * left-to-right box-centre order with no separator, e.g. boxes 0, dot, 3, 2
- * read "0.32". Equal centres keep their input order (stable sort); every box
- * is included regardless of confidence. Returns "" for no boxes.
+ * Whole-image predicted reading of a box set: each box's class glyph (from
+ * the dataset's classes.yaml, so "dot" renders "." and "tr" renders "tr")
+ * concatenated in left-to-right box-centre order with no separator, e.g.
+ * boxes 0, dot, 3, 2 read "0.32". Equal centres keep their input order
+ * (stable sort); every box is included regardless of confidence. Returns ""
+ * for no boxes.
  */
-export function readingOf(boxes: Box[], classes: string[]): string {
+export function readingOf(boxes: Box[], classes: ClassInfo[]): string {
   return [...boxes]
     .sort((a, b) => a.x + a.w / 2 - (b.x + b.w / 2))
-    .map((b) => {
-      const name = classes[b.cls] ?? String(b.cls);
-      return classGlyph(name) ?? name;
-    })
+    .map((b) => classes[b.cls]?.glyph ?? String(b.cls))
     .join("");
 }

@@ -20,8 +20,9 @@ an annotated character-detection dataset:
    day × month grid, and crop one image per cell, saving the fitted grid
    geometry so the patches can be re-assembled after inference
    (`scripts/preprocess_pages.py`).
-3. **Label** the handwritten characters in each cell crop (classes `0-9`,
-   `dash`, `dot`) with the in-repo labeler app (`tools/labeler`).
+3. **Label** the handwritten characters in each cell crop (the class set is
+   defined per dataset — currently `0-9`, `dash`, `dot`, `tr`, `x`) with the
+   in-repo labeler app (`tools/labeler`).
 4. **Train** a YOLO character detector over the labeled crops and use it to
    bootstrap and audit annotations at scale
    (`scripts/bootstrap_annotations.py`, `scripts/audit_annotations.py`,

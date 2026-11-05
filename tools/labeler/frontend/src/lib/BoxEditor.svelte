@@ -11,9 +11,9 @@
    * dashed so the audit workspace can overlay predictions on annotations.
    * Box labels render in one of two styles: `labelStyle: "plain"` keeps
    * annotate's compact single tag; `"prominent"` (review/audit) draws the
-   * class on a large class-coloured chip with contrast-picked text plus the
-   * confidence on a separate small chip at the box's top-right (text sizes
-   * are tweakable constants in `labels.ts`).
+   * class glyph on a large class-coloured chip with contrast-picked text plus
+   * the confidence on a separate small chip at the box's top-right (text
+   * sizes are tweakable constants in `labels.ts`).
    */
   import {
     clamp, handlePoints, hitBox, hitHandle, type Pt,
@@ -22,7 +22,7 @@
     CONF_TEXT_PX, LABEL_TEXT_PX, READING_TEXT_PX, chipSize, drawChip,
   } from "./labels";
   import { classColor, classTextColor } from "./palette";
-  import type { Box } from "./types";
+  import type { Box, ClassInfo } from "./types";
 
   type OpBase = { start: Pt; moved: boolean };
   type Op =
@@ -48,7 +48,8 @@
     boxes: Box[];
     selected?: number;
     zoom: number;
-    classes: string[];
+    /** Class presentation (index = class id): chips draw `glyph`. */
+    classes: ClassInfo[];
     currentClass?: number | null;
     readonly?: boolean;
     /** Box-label rendering: "plain" keeps annotate's compact single tag;
@@ -232,7 +233,7 @@
   function drawBoxChips(
     ctx: CanvasRenderingContext2D,
     b: Box,
-    name: string,
+    glyph: string,
     x: number,
     y: number,
     w: number,
@@ -250,7 +251,7 @@
     const confText = b.conf !== undefined ? b.conf.toFixed(2) : null;
     const confChip = { textPx: CONF_TEXT_PX, bg: "rgba(0,0,0,0.72)", fg: "#fff" };
 
-    const lw = chipSize(ctx, name, clsChip);
+    const lw = chipSize(ctx, glyph, clsChip);
     const cw = confText !== null ? chipSize(ctx, confText, confChip) : null;
     const cwW = cw?.w ?? 0;
     const cwH = cw?.h ?? 0;
@@ -273,7 +274,7 @@
     }
     clsY = clamp(clsY, 0, Math.max(0, ih - lw.h));
 
-    drawChip(ctx, name, clsChip, clamp(x, 0, Math.max(0, iw - lw.w)), clsY);
+    drawChip(ctx, glyph, clsChip, clamp(x, 0, Math.max(0, iw - lw.w)), clsY);
     if (confText !== null && cw) {
       drawChip(
         ctx, confText, confChip,
@@ -317,12 +318,13 @@
       ctx.strokeRect(x, y, w, h);
       ctx.setLineDash([]);
 
-      const name = classes[b.cls] ?? String(b.cls);
+      const info = classes[b.cls];
+      const glyph = info ? info.glyph : String(b.cls);
       if (labelStyle === "prominent") {
-        drawBoxChips(ctx, b, name, x, y, w, h, W, H);
+        drawBoxChips(ctx, b, glyph, x, y, w, h, W, H);
       } else {
         // annotate's compact tag: class and confidence in one small chip
-        const tag = b.conf !== undefined ? `${name} ${b.conf.toFixed(2)}` : name;
+        const tag = b.conf !== undefined ? `${glyph} ${b.conf.toFixed(2)}` : glyph;
         ctx.font = "12px system-ui, sans-serif";
         const tw = ctx.measureText(tag).width;
         const ty = y >= 16 ? y - 15 : y + h;

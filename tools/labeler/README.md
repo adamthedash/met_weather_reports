@@ -41,6 +41,7 @@ CLI flags (all optional):
 | `--predictions` | `datasets/digits/predictions` | prediction files to review (mirrors the images tree) |
 | `--audit-predictions` | `datasets/digits/audit_predictions` | audit model output to compare against labels (mirrors the images tree) |
 | `--data-yaml` | `datasets/digits/data.yaml` | class names (file must exist and parse) |
+| `--class-map` | `classes.yaml` next to `--data-yaml` | class presentation: display glyph + keyboard shortcut per class (file must exist and parse) |
 | `--host` | `127.0.0.1` | bind address |
 | `--port` | `8125` | port |
 | `--dist` | `tools/labeler/frontend/dist` | built frontend directory |
@@ -49,7 +50,8 @@ CLI flags (all optional):
 
 ```
 datasets/digits/
-├── data.yaml                              # classes: 0-9, dash, dot
+├── data.yaml                              # classes: 0-9, dash, dot, tr, x
+├── classes.yaml                           # class presentation: glyph + keyboard shortcut per class
 ├── images/<source-id>/<r>_<c>.png         # one crop per table cell
 ├── labels/<source-id>/<r>_<c>.txt         # YOLO labels (5 columns)
 ├── manual/<source-id>/<r>_<c>.txt         # manual-queue marker (empty file)
@@ -73,6 +75,12 @@ consumed and deleted by the review and audit stages):
 
 Prediction files are intentionally not loadable as YOLO labels; only accepted
 files under `labels/` are.
+
+`classes.yaml` (required) is the class presentation map: one `{glyph, key}`
+entry per `data.yaml` class, keyed by class name (`key: null` makes the class
+click-only). `glyph` is what the class renders as — on box chips, in the
+review reading, and in summary chips — and `key` is its annotate keyboard
+shortcut (a `KeyboardEvent.key` value, e.g. `"x"`, `"t"`, `"-"`).
 
 Semantics shared with the training pipeline (`scripts/prepare_dataset.py`
 treats them identically):
@@ -117,12 +125,12 @@ Crops, zoom and view mode resume where you left off (`localStorage`, keys
 | drag selected box | move |
 | drag handle | resize selected box |
 | right-click | delete box under cursor |
-| `0`–`9`, `.`, `-` | assign class to selected box + set current class |
+| the class keys (see the palette chips) | assign class to selected box + set current class |
 | `←` `→` / `a` `d` | previous / next crop |
 | `⏎` | save & next |
-| `x` | mark crop empty/ignored & next |
+| `⌫` | mark crop empty/ignored & next |
 | `z` | undo (100 steps) |
-| `⌫` / `Del` | delete selected box |
+| `Del` | delete selected box |
 | `Esc` | cancel drag / deselect |
 | `f` | cycle view mode: all → annotated → non-annotated → manual |
 | `[` / `]` | zoom out / in |
@@ -147,8 +155,8 @@ flagged; saving labels for it (including *mark empty*) clears the flag.
 ### review (`/review`)
 
 One keystroke per crop over the bootstrap predictions. Predicted boxes are
-display-only here: every box is tagged with its class on a large chip in the
-box's class colour (text colour picked for contrast against it) and the
+display-only here: every box is tagged with its class glyph on a large chip in
+the box's class colour (text colour picked for contrast against it) and the
 confidence on a separate smaller chip right-aligned at the box's top-right;
 wrong predictions are rejected and fixed in the annotate stage. The crop's
 whole-image predicted reading — the boxes' class glyphs concatenated in
@@ -226,8 +234,9 @@ Find incorrect labels by comparing them against a model's predictions: run
 resolve every disagreement here. The crop renders twice side by side —
 annotations on the left, model predictions on the right, each badged with
 its side (an empty side shows "(EMPTY)") — with boxes tagged as in review
-(class on a large class-coloured chip, prediction confidences on a separate
-chip at the box's top-right) and a plain-words issue list in the sidebar.
+(class glyph on a large class-coloured chip, prediction confidences on a
+separate chip at the box's top-right) and a plain-words issue list in the
+sidebar.
 One keystroke per crop:
 
 | Key | Action |
@@ -288,7 +297,7 @@ Core routes:
 |---|---|
 | `GET /api/health` | `{"ok": true, "version": …}` |
 | `GET /api/stages` | `{"stages": [{id, title, description}]}` |
-| `GET /api/classes` | `{"classes": [...]}` (from `data.yaml`, strict) |
+| `GET /api/classes` | `{"classes": [{"name", "glyph", "key"}]}` — one entry per class: `name` from `data.yaml`, `glyph` (display) and `key` (annotate shortcut, `null` for a click-only class) from `classes.yaml`, both strict |
 | `GET /api/image?path=` | raw crop image bytes |
 | `GET /api/docs` | OpenAPI explorer |
 | `GET /` | built frontend (503 with a build hint when `dist/` is missing) |
@@ -335,7 +344,7 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/app.py` | ASGI app: core `/api` routes, stage routers, built frontend at `/` |
 | `tools/labeler/main.py` | CLI flags, startup summary, uvicorn bootstrap |
 | `tools/labeler/config.py` | `Config`: bind address, dist, dataset roots |
-| `tools/labeler/dataset.py` | `Dataset` + helpers: classes, image listing, label/manual-marker/prediction I/O |
+| `tools/labeler/dataset.py` | `Dataset` + helpers: classes and their presentation, image listing, label/manual-marker/prediction I/O |
 | `tools/labeler/compare.py` | model-vs-label comparison: greedy IoU pairing + disagreement issues |
 | `tools/labeler/rankings.py` | review queue rankings: pluggable presentation order (natural, rare labels, gap filling) |
 | `tools/labeler/errors.py` | `ApiError` (HTTP error with a JSON-safe message) |
@@ -397,8 +406,14 @@ identical across them.
 - **`audit_predictions/` is owned by `scripts/audit_annotations.py`** — the
   audit stage only deletes files it decides; regeneration and pruning stay in
   the script, and one run is one review round.
-- **Class set is data-driven** — editing `data.yaml` names changes the palette
-  and keyboard map on the next load; ids must stay contiguous from 0.
+- **Class set is data-driven** — `data.yaml` names the classes and the
+  required sibling `classes.yaml` gives each its display glyph and annotate
+  keyboard shortcut (`key: null` = click-only), so the app is not hard-wired
+  to any dataset's class set; ids must stay contiguous from 0. Both files are
+  validated strictly at startup: `classes.yaml` must name exactly the
+  `data.yaml` classes, and duplicate shortcuts or shortcuts colliding with a
+  labeler action key (`a` `d` `f` `z` `[` `]` `⏎` `⌫` `Del` `Esc` `←` `→`)
+  abort startup.
 - **Box-label text sizes are constants** — `frontend/src/lib/labels.ts` holds
   `LABEL_TEXT_PX` (class chip), `CONF_TEXT_PX` (confidence chip) and
   `READING_TEXT_PX` (the review image's top-centre reading chip); tweak and

@@ -1,10 +1,13 @@
-"""Dataset helpers: class names, image listing, and YOLO label file I/O.
+"""Dataset helpers: class names, class presentation, image listing, and YOLO label file I/O.
 
 The dataset is an explicit :class:`Dataset` value object so each workflow
 stage can declare its own roots. Parsing is strict (malformed label files are
 reported, never skipped), ``validate_boxes`` clamps boxes to the image, and
 the on-disk format (``<class> <cx> <cy> <w> <h>`` normalised 0-1, 6 decimals)
 feeds ``scripts/prepare_dataset.py`` and ultralytics training unchanged.
+Class names come from ``data.yaml`` and class presentation (display glyph,
+keyboard shortcut) from the sibling ``classes.yaml``, so the tooling is not
+hard-wired to any dataset's class set.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Sequence, TypedDict
 
 import yaml
 
@@ -81,6 +84,67 @@ class SummarySubject(TypedDict):
     class_counts: list[int]
 
 
+class _StrictLoader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` that rejects duplicate mapping keys.
+
+    PyYAML silently keeps the last of duplicate keys, which would quietly
+    drop or renumber a class; strict parsing must reject the file instead.
+    """
+
+
+def _construct_mapping_strict(
+    loader: _StrictLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[object, object]:
+    """Mapping constructor that raises on a duplicate key (see :class:`_StrictLoader`)."""
+    mapping: dict[object, object] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:  # unhashable key
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"unhashable key {key!r}",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_strict
+)
+
+
+def _load_yaml(yaml_path: Path, what: str) -> object:
+    """Parse one YAML file, rejecting duplicate mapping keys.
+
+    Args:
+        yaml_path: The YAML file to read.
+        what: Human-readable role of the file, used in error messages.
+
+    Returns:
+        The parsed document.
+
+    Raises:
+        ValueError: If the file is missing or is not valid YAML.
+    """
+    if not yaml_path.is_file():
+        raise ValueError(f"{what} not found: {yaml_path}")
+    try:
+        return yaml.load(yaml_path.read_text(encoding="utf-8"), Loader=_StrictLoader)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{yaml_path}: invalid YAML: {exc}") from exc
+
+
 def load_classes(yaml_path: Path) -> list[str]:
     """Read class names from the int-keyed ``names:`` mapping of a YOLO data.yaml.
 
@@ -88,16 +152,12 @@ def load_classes(yaml_path: Path) -> list[str]:
     back to defaults.
 
     Raises:
-        ValueError: If the file is missing, is not valid YAML, or has no
-            usable ``names:`` mapping (non-mapping or empty, non-integer or
-            duplicate keys, non-string names).
+        ValueError: If the file is missing, is not valid YAML (including a
+            duplicate mapping key), or has no usable ``names:`` mapping
+            (non-mapping or empty, non-integer or duplicate keys,
+            non-string names).
     """
-    if not yaml_path.is_file():
-        raise ValueError(f"data.yaml not found: {yaml_path}")
-    try:
-        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ValueError(f"{yaml_path}: invalid YAML: {exc}") from exc
+    data = _load_yaml(yaml_path, "data.yaml")
     raw = data.get("names") if isinstance(data, dict) else None
     if not isinstance(raw, dict) or not raw:
         raise ValueError(f"{yaml_path}: expected a non-empty 'names:' mapping")
@@ -119,6 +179,156 @@ def load_classes(yaml_path: Path) -> list[str]:
             raise ValueError(f"{yaml_path}: duplicate names index {idx}")
         names[idx] = str(value)
     return [names[i] for i in sorted(names)]
+
+
+@dataclass(frozen=True)
+class ClassDisplay:
+    """One class's presentation: display glyph and keyboard shortcut.
+
+    Sourced from the dataset's ``classes.yaml`` (see :func:`load_class_map`).
+    The frontend draws `glyph` on box chips and in readings and binds `key`
+    in the annotate stage; `key` is None for a click-only class.
+    """
+
+    name: str
+    glyph: str
+    key: str | None
+
+
+# KeyboardEvent.key values the annotate stage binds to its own actions
+# (frontend/src/stages/AnnotateWorkspace.svelte): navigation (a, d,
+# ArrowLeft, ArrowRight), save & next (Enter), mark empty (Backspace),
+# delete box (Delete), undo (z), view mode (f), zoom ([ ]), cancel (Escape).
+# A class shortcut must not collide with any of them; modified chords like
+# Ctrl+S are no collision since class keys fire unmodified.
+RESERVED_KEYS = frozenset(
+    {
+        "a",
+        "d",
+        "f",
+        "z",
+        "[",
+        "]",
+        "Enter",
+        "Backspace",
+        "Delete",
+        "Escape",
+        "ArrowLeft",
+        "ArrowRight",
+    }
+)
+
+
+def load_class_map(yaml_path: Path, class_names: Sequence[str]) -> list[ClassDisplay]:
+    """Read per-class presentation (glyph, keyboard shortcut) from ``classes.yaml``.
+
+    ``classes.yaml`` sits alongside ``data.yaml`` and is required: it is the
+    single source of truth for how each class displays and keys in the
+    labeler, so the application is not hard-wired to any dataset's class
+    names. It is a class-name-keyed mapping of ``{glyph, key}`` entries
+    (``key: null`` makes the class click-only):
+
+    .. code-block:: yaml
+
+        dash: {glyph: "-", key: "-"}
+        tr:   {glyph: "tr", key: "t"}
+        x:    {glyph: "x",  key: "x"}
+
+    Parsing is strict (same contract as :func:`load_classes`): the entry set
+    must match `class_names` exactly and nothing is silently ignored,
+    defaulted, or overridden.
+
+    Args:
+        yaml_path: The ``classes.yaml`` file to read.
+        class_names: The dataset's class names (from :func:`load_classes`),
+            defining the required entry set.
+
+    Returns:
+        One :class:`ClassDisplay` per class, in `class_names` order.
+
+    Raises:
+        ValueError: If the file is missing, is not valid YAML (including a
+            duplicate mapping key), has no usable mapping, has entries not
+            matching `class_names` exactly (missing or unknown names),
+            defines a malformed `glyph` or `key`, or binds two classes to
+            one key or a class to a reserved labeler action key.
+    """
+    data = _load_yaml(yaml_path, "classes.yaml")
+    if not isinstance(data, dict) or not data:
+        raise ValueError(f"{yaml_path}: expected a non-empty class mapping")
+
+    def text_field(value: object, field: str, name: str) -> str:
+        """One entry's glyph/key: a non-empty string (an int renders as its digits)."""
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise ValueError(
+                f"{yaml_path}: {field} for class {name!r} must be a string, "
+                f"got {type(value).__name__}"
+            )
+        text = str(value)
+        if not text:
+            raise ValueError(f"{yaml_path}: {field} for class {name!r} must not be empty")
+        return text
+
+    entries: dict[str, dict[object, object]] = {}
+    for raw_name, raw_entry in data.items():
+        if isinstance(raw_name, bool) or not isinstance(raw_name, (int, str)):
+            raise ValueError(
+                f"{yaml_path}: class name key {raw_name!r} is not a string"
+            )
+        name = str(raw_name)
+        if name in entries:
+            raise ValueError(f"{yaml_path}: duplicate entry for class {name!r}")
+        if not isinstance(raw_entry, dict):
+            raise ValueError(
+                f"{yaml_path}: entry for class {name!r} must be a mapping"
+            )
+        if "glyph" not in raw_entry or "key" not in raw_entry:
+            raise ValueError(
+                f"{yaml_path}: entry for class {name!r} must define 'glyph' and 'key'"
+            )
+        unknown = sorted(str(k) for k in raw_entry if k not in ("glyph", "key"))
+        if unknown:
+            raise ValueError(
+                f"{yaml_path}: entry for class {name!r} has unknown fields: "
+                + ", ".join(unknown)
+            )
+        entries[name] = raw_entry
+
+    missing = [n for n in class_names if n not in entries]
+    unknown = sorted(n for n in entries if n not in set(class_names))
+    if missing or unknown:
+        problems = []
+        if missing:
+            problems.append("missing entries for: " + ", ".join(missing))
+        if unknown:
+            problems.append("unknown classes: " + ", ".join(unknown))
+        raise ValueError(
+            f"{yaml_path}: does not match the data.yaml class names — "
+            + "; ".join(problems)
+        )
+
+    display: list[ClassDisplay] = []
+    bound: dict[str, str] = {}  # keyboard key -> class name
+    for name in class_names:
+        entry = entries[name]
+        glyph = text_field(entry["glyph"], "glyph", name)
+        raw_key = entry["key"]
+        key: str | None = None
+        if raw_key is not None:
+            key = text_field(raw_key, "key", name)
+            if key in RESERVED_KEYS:
+                raise ValueError(
+                    f"{yaml_path}: key {key!r} for class {name!r} collides "
+                    "with a labeler action key"
+                )
+            if key in bound:
+                raise ValueError(
+                    f"{yaml_path}: key {key!r} is bound to both "
+                    f"{bound[key]!r} and {name!r}"
+                )
+            bound[key] = name
+        display.append(ClassDisplay(name=name, glyph=glyph, key=key))
+    return display
 
 
 def natural_key(rel: str) -> list[int | str]:
@@ -145,7 +355,11 @@ def safe_path(root: Path, rel: str) -> Path:
 
 @dataclass(frozen=True)
 class Dataset:
-    """One dataset: crop images root, label files root, and class names.
+    """One dataset: crop images root, label files root, class names and presentation.
+
+    `classes` is the ``data.yaml`` class set (the id → name mapping label
+    files index); `display` is the parallel ``classes.yaml`` presentation
+    (glyph, keyboard shortcut) the frontend renders and keys by.
 
     Label files mirror the images tree (``<stem>.txt`` in the same subdirs)
     under ``labels_root``; prediction files mirror it under two roots:
@@ -169,6 +383,7 @@ class Dataset:
     predictions_root: Path
     audit_root: Path
     classes: tuple[str, ...]
+    display: tuple[ClassDisplay, ...]
 
     def image_path(self, rel: str) -> Path:
         """Absolute path of crop `rel` under the images root.

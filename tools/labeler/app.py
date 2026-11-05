@@ -80,8 +80,13 @@ def create_app(cfg: Config, ds: Dataset | None = None) -> FastAPI:
 
     @app.get("/api/classes")
     async def classes() -> dict[str, object]:
-        """The dataset's class names (data.yaml is the single source of truth)."""
-        return {"classes": list(ds.classes)}
+        """The dataset's classes and their presentation (data.yaml names,
+        classes.yaml display glyphs and keyboard shortcuts)."""
+        return {
+            "classes": [
+                {"name": d.name, "glyph": d.glyph, "key": d.key} for d in ds.display
+            ]
+        }
 
     @app.get("/api/image")
     async def image(path: str | None = Query(default=None)) -> FileResponse:

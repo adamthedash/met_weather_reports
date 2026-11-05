@@ -1,4 +1,8 @@
-/** Class palette: deterministic colours and keyboard shortcuts. */
+/** Class palette: deterministic colours per class index.
+ *
+ * Class presentation (display glyph, keyboard shortcut) is not derived here:
+ * it is dataset configuration served by `/api/classes` (the dataset's
+ * classes.yaml). */
 
 /** Deterministic hue of a class index (the varying part of its colour). */
 function classHue(cls: number): number {
@@ -44,29 +48,4 @@ export function classTextColor(cls: number): string {
       contrast(bg, luminance(dark, dark, dark))
     ? "#fff"
     : "#111";
-}
-
-/**
- * Single-character glyph of a class name: "dot" is ".", "dash" is "-", and a
- * length-1 name is itself. Null when the name has no natural glyph.
- */
-export function classGlyph(name: string): string | null {
-  if (name === "dot") return ".";
-  if (name === "dash") return "-";
-  return name.length === 1 ? name : null;
-}
-
-/** Keyboard shortcut character for a class name, or null when it has none. */
-export function shortcutFor(name: string): string | null {
-  return classGlyph(name);
-}
-
-/** Map every class shortcut to its class index (first class wins a key). */
-export function buildShortcutMap(classes: string[]): Record<string, number> {
-  const map: Record<string, number> = {};
-  classes.forEach((name, i) => {
-    const s = shortcutFor(name);
-    if (s !== null && !(s in map)) map[s] = i;
-  });
-  return map;
 }

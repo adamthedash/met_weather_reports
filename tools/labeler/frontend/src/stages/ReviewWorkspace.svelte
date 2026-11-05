@@ -30,13 +30,13 @@
   import { readingOf } from "../lib/labels";
   import { classColor } from "../lib/palette";
   import type {
-    Box, LabelError, PredBoxN, PredEntry, RankingSummary,
+    Box, ClassInfo, LabelError, PredBoxN, PredEntry, RankingSummary,
   } from "../lib/types";
 
   /** localStorage key of the persisted queue ranking choice. */
   const RANK_KEY = "labeler.review.ranking";
 
-  let classes = $state<string[]>([]);
+  let classes = $state<ClassInfo[]>([]);
   let items = $state<PredEntry[]>([]);
   let index = $state(0);
   let reviewed = $state(0);
@@ -450,7 +450,7 @@
         {#each boxes as b, i (i)}
           <li>
             <span class="swatch" style={`background: ${classColor(b.cls)}`}></span>
-            <span>{classes[b.cls] ?? String(b.cls)}</span>
+            <span>{classes[b.cls]?.name ?? String(b.cls)}</span>
             <small>conf {b.conf?.toFixed(4)}</small>
           </li>
         {/each}

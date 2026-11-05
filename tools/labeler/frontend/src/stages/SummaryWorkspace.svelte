@@ -13,10 +13,12 @@
   import { onMount } from "svelte";
 
   import { api } from "../lib/api";
-  import { classColor, classGlyph, classTextColor } from "../lib/palette";
-  import type { SummaryOverview } from "../lib/types";
+  import { classColor, classTextColor } from "../lib/palette";
+  import type { ClassInfo, SummaryOverview } from "../lib/types";
 
   let data = $state<SummaryOverview | null>(null);
+  /** Class presentation for the chips (same index order as `data.classes`). */
+  let infos = $state<ClassInfo[]>([]);
   let loading = $state(false);
   let status = $state<{ msg: string; kind: "" | "ok" | "error" }>({
     msg: "",
@@ -38,7 +40,12 @@
     if (loading) return;
     loading = true;
     try {
-      data = await api.summaryOverview();
+      const [classes, overview] = await Promise.all([
+        api.classes(),
+        api.summaryOverview(),
+      ]);
+      infos = classes.classes;
+      data = overview;
       status = { msg: "", kind: "" };
     } catch (err) {
       status = { msg: "load failed: " + errMsg(err), kind: "error" };
@@ -91,7 +98,7 @@
                 class="chip"
                 style={`background: ${classColor(cls)}; color: ${classTextColor(cls)}`}
               >
-                {classGlyph(data.classes[cls]) ?? data.classes[cls]}
+                {infos[cls]?.glyph ?? data.classes[cls]}
               </span>
               <span class="name">{data.classes[cls]}</span>
               <span class="bar">
@@ -132,7 +139,7 @@
                       class="chip"
                       style={`background: ${classColor(cls)}; color: ${classTextColor(cls)}`}
                     >
-                      {classGlyph(name) ?? name}
+                      {infos[cls]?.glyph ?? name}
                     </span>
                   </th>
                 {/each}

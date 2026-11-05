@@ -22,6 +22,12 @@ export type BoxN = { cls: number; cx: number; cy: number; w: number; h: number }
 /** A predicted YOLO box, normalised 0-1, with its confidence score. */
 export type PredBoxN = BoxN & { conf: number };
 
+/** One class's presentation (from the dataset's classes.yaml via
+ *  GET /api/classes): the display glyph drawn on chips and in readings, and
+ *  the annotate-stage keyboard shortcut; `key` is null for a click-only
+ *  class. Index in the `/api/classes` list = class id. */
+export type ClassInfo = { name: string; glyph: string; key: string | null };
+
 /** One queue entry: a crop image and its labeling status. `manual` flags the
  *  manual queue (marked in review as needing manual adjustment, not yet
  *  labeled); the listing serves manual entries first. */

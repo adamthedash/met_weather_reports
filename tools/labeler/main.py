@@ -61,6 +61,13 @@ def main() -> None:
         default=DEFAULT_DATA_YAML,
         help="YOLO data.yaml defining the class names (must exist and parse)",
     )
+    ap.add_argument(
+        "--class-map",
+        type=Path,
+        default=None,
+        help="classes.yaml defining the display glyph and keyboard shortcut "
+        "of every class (default: classes.yaml next to --data-yaml)",
+    )
     ap.add_argument("--host", default="127.0.0.1", help="bind address")
     ap.add_argument("--port", type=int, default=8125, help="port")
     ap.add_argument(
@@ -81,9 +88,11 @@ def main() -> None:
         predictions_root=args.predictions,
         audit_predictions_root=args.audit_predictions,
         data_yaml=args.data_yaml,
+        class_map=args.class_map,
     )
-    # strict by design: a missing images root or bad data.yaml aborts startup
-    # with a clear error instead of running against a half-configured dataset
+    # strict by design: a missing images root or bad data.yaml/classes.yaml
+    # aborts startup with a clear error instead of running against a
+    # half-configured dataset
     try:
         ds = cfg.dataset()
     except ValueError as exc:
@@ -100,6 +109,10 @@ def main() -> None:
     print(f"  images : {len(rels)} crops under {ds.images_root}")
     print(f"  labels : {ds.labels_root}")
     print(f"  classes: {', '.join(ds.classes)} ({len(ds.classes)})")
+    print(
+        "  keys   : "
+        + ", ".join(f"{d.name}={d.key}" for d in ds.display if d.key is not None)
+    )
     print(f"  done   : {done} / {len(rels)}")
     print(f"  manual : {manual} flagged for manual adjustment")
     print(

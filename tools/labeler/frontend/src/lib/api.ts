@@ -1,9 +1,9 @@
 /** Typed fetch helpers for the labeler JSON API. */
 
 import type {
-  AuditAction, AuditDecisionResult, AuditList, BoxN, CompareResult,
-  DecisionResult, Listing, ManualResult, PredBoxN, RankingSummary, ReviewList,
-  SummaryOverview,
+  AuditAction, AuditDecisionResult, AuditList, BoxN, ClassInfo,
+  CompareResult, DecisionResult, Listing, ManualResult, PredBoxN,
+  RankingSummary, ReviewList, SummaryOverview,
 } from "./types";
 
 /** Shape every API error response has (see tools/labeler/app.py). */
@@ -44,8 +44,9 @@ export type SaveResult = { ok: boolean; saved: number; has_labels: boolean };
 export const api = {
   /** Every registered workflow stage. */
   stages: () => fetchJSON<{ stages: StageSummary[] }>("/api/stages"),
-  /** The dataset's class names. */
-  classes: () => fetchJSON<{ classes: string[] }>("/api/classes"),
+  /** The dataset's classes and their presentation (names from data.yaml,
+   *  display glyphs and keyboard shortcuts from classes.yaml). */
+  classes: () => fetchJSON<{ classes: ClassInfo[] }>("/api/classes"),
   /** URL of a crop image (for <img src> / loadImage). */
   imageURL: (path: string) => `/api/image?path=${encodeURIComponent(path)}`,
   /** The annotate queue listing. */
