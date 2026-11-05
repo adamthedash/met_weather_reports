@@ -22,6 +22,8 @@ from tools.labeler.errors import ApiError
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 MAX_BOXES = 64
+# subject id of a crop sitting directly under the images root (no subfolder)
+ROOT_SUBJECT_ID = "(root)"
 _NUM_RE = re.compile(r"(\d+)")
 
 
@@ -44,6 +46,39 @@ class PredBox(TypedDict):
     w: float
     h: float
     conf: float
+
+
+class LabelProblem(TypedDict):
+    """A label file the summary could not count: `{path, error}`."""
+
+    path: str
+    error: str
+
+
+class SummaryTotals(TypedDict):
+    """Dataset-wide crop and box totals of :meth:`Dataset.summary`."""
+
+    crops: int
+    annotated: int
+    empty: int
+    unlabeled: int
+    boxes: int
+
+
+class SummarySubject(TypedDict):
+    """One subject row of :meth:`Dataset.summary`.
+
+    The crop counts of one subject (a source page's crop folder) plus its
+    labeled boxes per class (``class_counts`` parallels ``classes``).
+    """
+
+    id: str
+    crops: int
+    annotated: int
+    empty: int
+    unlabeled: int
+    boxes: int
+    class_counts: list[int]
 
 
 def load_classes(yaml_path: Path) -> list[str]:
@@ -533,3 +568,104 @@ class Dataset:
                 }
             queue.append(entry)
         return queue, compared
+
+    def summary(self) -> dict[str, object]:
+        """Aggregate the dataset's current labeling state for the summary page.
+
+        One image-driven pass over :meth:`list_images` — the same crop set the
+        annotate stage lists and ``scripts/prepare_dataset.py`` trains on.
+        Every crop is grouped under its **subject**: the first path component
+        of its relative path (``images/<source-id>/…``, so a second page's
+        ``<subject>_2`` folder is a subject of its own), or
+        ``ROOT_SUBJECT_ID`` for a crop sitting directly under the images root.
+        The mirrored label file then decides the crop's state with the shared
+        dataset semantics: absent → `unlabeled`, empty → `annotated` and
+        `empty`, non-empty → `annotated` with its boxes counted per class.
+
+        A malformed label file counts as `annotated` (its file exists, the
+        shared done-semantics) but contributes no boxes and no `empty` count;
+        it is reported in `label_errors` instead of silently skewing the
+        counts. A label file mirroring no image — what
+        ``scripts/prepare_dataset.py`` rejects as inconsistent — is listed in
+        `orphan_labels` and excluded from every count.
+
+        Returns:
+            ``{classes, totals, class_counts, subjects, label_errors,
+            orphan_labels}``: `classes` is the data.yaml class set; `totals`
+            holds ``{crops, annotated, empty, unlabeled, boxes}`` (where
+            `annotated` includes `empty`); `class_counts` holds one labeled
+            box count per class (0 for never-labeled classes); `subjects`
+            holds one :class:`SummarySubject` per subject in
+            :func:`natural_key` order whose rows sum exactly to `totals` and
+            `class_counts`; `label_errors` holds :class:`LabelProblem`
+            entries for malformed label files; `orphan_labels` lists the
+            label files mirroring no image.
+        """
+        n_cls = len(self.classes)
+        totals = SummaryTotals(crops=0, annotated=0, empty=0, unlabeled=0, boxes=0)
+        class_counts = [0] * n_cls
+        subjects: dict[str, SummarySubject] = {}
+        label_errors: list[LabelProblem] = []
+        image_stems: set[str] = set()
+        for rel in self.list_images():
+            p = Path(rel)
+            image_stems.add(p.with_suffix("").as_posix())
+            subject_id = p.parts[0] if len(p.parts) > 1 else ROOT_SUBJECT_ID
+            row = subjects.setdefault(
+                subject_id,
+                SummarySubject(
+                    id=subject_id,
+                    crops=0,
+                    annotated=0,
+                    empty=0,
+                    unlabeled=0,
+                    boxes=0,
+                    class_counts=[0] * n_cls,
+                ),
+            )
+            row["crops"] += 1
+            totals["crops"] += 1
+            label_file = self.label_path_for(rel)
+            if not label_file.is_file():
+                row["unlabeled"] += 1
+                totals["unlabeled"] += 1
+                continue
+            row["annotated"] += 1
+            totals["annotated"] += 1
+            try:
+                boxes = self.read_label_file(rel, label_file)
+            except ApiError as exc:
+                label_errors.append(
+                    {
+                        "path": label_file.relative_to(self.labels_root).as_posix(),
+                        "error": exc.message,
+                    }
+                )
+                continue
+            if not boxes:
+                row["empty"] += 1
+                totals["empty"] += 1
+                continue
+            row["boxes"] += len(boxes)
+            totals["boxes"] += len(boxes)
+            for b in boxes:
+                row["class_counts"][b["cls"]] += 1
+                class_counts[b["cls"]] += 1
+        orphan_labels = sorted(
+            (
+                path.relative_to(self.labels_root).as_posix()
+                for path in self.labels_root.rglob("*.txt")
+                if path.is_file()
+                and path.relative_to(self.labels_root).with_suffix("").as_posix()
+                not in image_stems
+            ),
+            key=natural_key,
+        )
+        return {
+            "classes": list(self.classes),
+            "totals": totals,
+            "class_counts": class_counts,
+            "subjects": [subjects[sid] for sid in sorted(subjects, key=natural_key)],
+            "label_errors": label_errors,
+            "orphan_labels": orphan_labels,
+        }

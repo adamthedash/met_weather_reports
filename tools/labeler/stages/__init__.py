@@ -7,7 +7,7 @@ frontend workspace in ``frontend/src/stages/registry.ts`` under the same id.
 from __future__ import annotations
 
 from tools.labeler.dataset import Dataset
-from tools.labeler.stages import annotate, audit, review
+from tools.labeler.stages import annotate, audit, review, summary
 from tools.labeler.stages.base import Stage, summaries
 
 __all__ = ["Stage", "build_stages", "summaries"]
@@ -19,4 +19,5 @@ def build_stages(ds: Dataset) -> list[Stage]:
         annotate.create_stage(ds),
         review.create_stage(ds),
         audit.create_stage(ds),
+        summary.create_stage(ds),
     ]

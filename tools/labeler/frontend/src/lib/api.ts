@@ -3,6 +3,7 @@
 import type {
   AuditAction, AuditDecisionResult, AuditList, BoxN, CompareResult,
   DecisionResult, Listing, PredBoxN, RankingSummary, ReviewList,
+  SummaryOverview,
 } from "./types";
 
 /** Shape every API error response has (see tools/labeler/app.py). */
@@ -99,4 +100,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, action }),
     }),
+
+  // -- summary stage ----------------------------------------------------
+  /** The dataset's aggregate state: totals, class and per-subject distributions. */
+  summaryOverview: () => fetchJSON<SummaryOverview>("/api/summary/overview"),
 };

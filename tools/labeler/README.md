@@ -2,7 +2,8 @@
 
 One application for the dataset's annotation workflows: manual bounding-box
 labeling (**annotate**), accept/reject review of bootstrap predictions
-(**review**), and model-vs-label disagreement resolution (**audit**). It is
+(**review**), and model-vs-label disagreement resolution (**audit**), plus a
+read-only overview of the dataset's labeling state (**summary**). It is
 structured as a registry of pluggable workflow **stages**
 so new pipeline stages (triage, spot-check, merge, correction rounds) can be
 added later without touching the shared engine.
@@ -19,8 +20,8 @@ just labeler        # pnpm install + vite build, then serve on http://127.0.0.1:
 ```
 
 Open the URL in a browser (forward the port first when working over SSH).
-The top bar switches between the stages (`/annotate`, `/review`, `/audit`
-deep links).
+The top bar switches between the stages (`/annotate`, `/review`, `/audit`,
+`/summary` deep links).
 `Ctrl+C` stops the server.
 
 Development, in two terminals:
@@ -227,6 +228,27 @@ One keystroke per crop:
   its sound side: a malformed prediction can never be taken, a malformed
   label can never be kept; *discard both* is always available.
 
+### summary (`/summary`)
+
+A read-only overview of the dataset as it stands — no queue, no decisions,
+nothing written. Three panels:
+
+- **progress** — headline totals: crops, annotated (including the empty
+  ones), of which empty, unlabeled, labeled boxes.
+- **class distribution** — labeled boxes per class (every class from
+  `data.yaml` is shown, never-labeled classes at 0), with the crops marked
+  empty/ignored alongside as its own row (a crop count, not a box count).
+- **per-subject distribution** — one row per subject (the crop folder's
+  `<source-id>`, so a second page's `<subject>_2` folder is a subject of its
+  own; crops directly under the images root group as `(root)`) in natural
+  order, with the crop counts and the full per-class box breakdown.
+
+Malformed label files and label files mirroring no crop image (what
+`scripts/prepare_dataset.py` rejects as inconsistent) are listed under
+**problems** and excluded from every count, so corruption cannot silently
+skew the numbers. The page fetches on load and has a refresh button; the
+data is rescanned from disk on every request.
+
 ## API contract
 
 Errors are always JSON `{"error": ...}` (400/404/413/500) and every response
@@ -270,6 +292,12 @@ Audit stage (mounted at `/api/audit`):
 | `GET /api/audit/compare?path=` | `{"path", "labels", "predictions", "issues"}` — both box sets (normalised, predictions carry `conf`) and the disagreements `[{kind, label, pred, iou}]` |
 | `POST /api/audit/decision` | `{"path", "action": "keep_label"\|"take_prediction"\|"discard_both"}` → `{"ok", "action", "saved"}` |
 
+Summary stage (mounted at `/api/summary`):
+
+| Route | Returns |
+|---|---|
+| `GET /api/summary/overview` | `{"classes", "totals": {crops, annotated, empty, unlabeled, boxes}, "class_counts", "subjects", "label_errors", "orphan_labels"}` — the dataset's aggregate state (a scan route like `/list`); `annotated` includes `empty`; each `subjects` row is `{id, crops, annotated, empty, unlabeled, boxes, class_counts}` in natural id order and the rows sum exactly to `totals` / `class_counts`; `label_errors` lists malformed label files (`{path, error}`) and `orphan_labels` the label files mirroring no image — both excluded from every count |
+
 On-disk parsing is strict: malformed label or prediction lines are reported
 (400), never silently skipped or promoted into the dataset.
 
@@ -289,6 +317,7 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/stages/annotate.py` | annotate stage: queue listing + label I/O |
 | `tools/labeler/stages/review.py` | review stage: prediction queue + accept/reject decisions |
 | `tools/labeler/stages/audit.py` | audit stage: disagreement queue + keep/take/discard decisions |
+| `tools/labeler/stages/summary.py` | summary stage: read-only dataset aggregate (class + per-subject distributions) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
 | `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
 | `tools/labeler/frontend/src/lib/labels.ts` | label text sizes (the tweakable constants), chip drawing, reading composition |

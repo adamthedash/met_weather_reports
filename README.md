@@ -54,7 +54,7 @@ Tools and technologies the pipeline is built on:
 | `pixi.toml` / `pixi.lock` | pixi workspace `met_weather`: Python environment and dependencies |
 | `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `prep_dataset`, `bootstrap`, `audit`, `labeler`) and dev servers |
 | `scripts/` | the pipeline stages, one script each (see below) |
-| `tools/labeler/` | combined annotation web app (annotate / review / audit stages) — details in [`tools/labeler/README.md`](tools/labeler/README.md) |
+| `tools/labeler/` | combined annotation web app (annotate / review / audit stages, plus a read-only dataset summary page) — details in [`tools/labeler/README.md`](tools/labeler/README.md) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built into `frontend/dist` |
 | `notebooks/` | marimo notebooks: preprocessing prototypes (`preprocess.py`, `test.py`) and YOLO training (`yolo.py`) |
 | `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata/cell patches/QC renders (`data/`), the digits dataset (`datasets/digits/`), model weights (`models/`), Ultralytics training runs (`runs/`) |

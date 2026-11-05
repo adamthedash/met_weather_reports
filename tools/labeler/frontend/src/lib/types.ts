@@ -114,3 +114,32 @@ export type AuditDecisionResult = {
   action: AuditAction;
   saved: number;
 };
+
+/** Dataset-wide crop and box totals of the summary overview. */
+export type SummaryTotals = {
+  crops: number;
+  annotated: number;
+  empty: number;
+  unlabeled: number;
+  boxes: number;
+};
+
+/** One summary subject row: one source page's crop counts and its labeled
+ *  box counts per class (`class_counts` parallels the overview's `classes`). */
+export type SummarySubject = SummaryTotals & {
+  id: string;
+  class_counts: number[];
+};
+
+/** Result of GET /api/summary/overview: the dataset's aggregate labeling
+ *  state. `class_counts` holds one box count per class (0 for never-labeled
+ *  classes); `label_errors` are malformed label files and `orphan_labels`
+ *  are label files mirroring no crop image — both excluded from the counts. */
+export type SummaryOverview = {
+  classes: string[];
+  totals: SummaryTotals;
+  class_counts: number[];
+  subjects: SummarySubject[];
+  label_errors: LabelError[];
+  orphan_labels: string[];
+};
