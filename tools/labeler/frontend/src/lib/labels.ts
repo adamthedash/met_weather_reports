@@ -15,7 +15,7 @@ export const LABEL_TEXT_PX = 22;
 /** Confidence-chip text size — the separate prediction confidence chip. */
 export const CONF_TEXT_PX = 16;
 
-/** Whole-image reading text size — the review sidebar's big reading string. */
+/** Whole-image reading text size — the review image's top-centre chip. */
 export const READING_TEXT_PX = 60;
 
 /** Horizontal chip padding as a fraction of the text size. */
@@ -30,6 +30,8 @@ export type ChipMetrics = {
   textPx: number;
   /** Bold text (class chip) vs regular (confidence chip, badges). */
   bold?: boolean;
+  /** Monospace text (numeric readings) vs the default system font. */
+  mono?: boolean;
   /** Horizontal padding; defaults to a fraction of `textPx`. */
   padX?: number;
   /** Vertical padding; defaults to a fraction of `textPx`. */
@@ -46,7 +48,8 @@ export type ChipStyle = ChipMetrics & {
 
 /** Canvas font string for a chip's metrics. */
 function fontOf(m: ChipMetrics): string {
-  return `${m.bold ? "bold " : ""}${m.textPx}px system-ui, sans-serif`;
+  const family = m.mono ? "ui-monospace, monospace" : "system-ui, sans-serif";
+  return `${m.bold ? "bold " : ""}${m.textPx}px ${family}`;
 }
 
 /** Measured chip size (px) of `text` (text plus padding). */

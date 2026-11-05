@@ -132,10 +132,11 @@ One keystroke per crop over the bootstrap predictions. Predicted boxes are
 display-only here: every box is tagged with its class on a large chip in the
 box's class colour (text colour picked for contrast against it) and the
 confidence on a separate smaller chip right-aligned at the box's top-right;
-wrong predictions are rejected and fixed in the annotate stage. Beside the
-image the sidebar shows the crop's whole-image predicted reading — the boxes'
-class glyphs concatenated in left-to-right box-centre order (e.g. "0.32") in
-large text — so a crop can be judged without reading each box. The text sizes
+wrong predictions are rejected and fixed in the annotate stage. The crop's
+whole-image predicted reading — the boxes' class glyphs concatenated in
+left-to-right box-centre order (e.g. "0.32") — is drawn in large text on a
+dark chip at the image's top-centre (an area normally free of predicted
+boxes), so a crop can be judged without reading each box. The text sizes
 are tweakable constants in `frontend/src/lib/labels.ts`.
 
 | Key | Action |
@@ -326,5 +327,5 @@ never filter: queue membership and decisions stay identical across them.
   and keyboard map on the next load; ids must stay contiguous from 0.
 - **Box-label text sizes are constants** — `frontend/src/lib/labels.ts` holds
   `LABEL_TEXT_PX` (class chip), `CONF_TEXT_PX` (confidence chip) and
-  `READING_TEXT_PX` (the review sidebar's whole-image reading); tweak and
+  `READING_TEXT_PX` (the review image's top-centre reading chip); tweak and
   rebuild.

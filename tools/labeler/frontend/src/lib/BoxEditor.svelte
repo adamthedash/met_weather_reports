@@ -19,7 +19,7 @@
     clamp, handlePoints, hitBox, hitHandle, type Pt,
   } from "./boxes";
   import {
-    CONF_TEXT_PX, LABEL_TEXT_PX, chipSize, drawChip,
+    CONF_TEXT_PX, LABEL_TEXT_PX, READING_TEXT_PX, chipSize, drawChip,
   } from "./labels";
   import { classColor, classTextColor } from "./palette";
   import type { Box } from "./types";
@@ -40,6 +40,7 @@
     readonly = false,
     labelStyle = "plain",
     badge = "",
+    reading = undefined,
     onedit = () => {},
     onstatus = () => {},
   }: {
@@ -58,6 +59,10 @@
     /** Fixed-size badge text drawn in the image's top-left corner (e.g.
      *  "EMPTY", "PREDICTED EMPTY"); hidden when empty. */
     badge?: string;
+    /** Whole-image reading drawn on a dark chip at the image's top-centre
+     *  (review). Omitted draws nothing (annotate/audit); empty draws a dimmed
+     *  "—" placeholder; any other string is the reading itself. */
+    reading?: string;
     onedit?: (snapshot: Box[]) => void;
     onstatus?: (msg: string, kind?: "" | "ok" | "error") => void;
   } = $props();
@@ -278,7 +283,7 @@
     }
   }
 
-  /** Draw the image and its boxes (label chips, handles, corner badge). */
+  /** Draw the image and its boxes (label chips, handles, badge, reading). */
   function render(): void {
     const ctx = cv.getContext("2d");
     if (!ctx) return;
@@ -344,6 +349,29 @@
         textPx: 12, bg: "rgba(0,0,0,0.72)", fg: "#fff",
         padX: 4, padY: 1.5,
       }, 6, 6);
+    }
+
+    // whole-image reading (review): a large monospace chip centred at the
+    // image's top edge — this area is normally free of predicted boxes.
+    // Omitted draws nothing; empty text draws a dimmed placeholder. Fixed
+    // screen px like the badge (does not scale with zoom), on top of all.
+    if (reading !== undefined) {
+      const text = reading || "—";
+      let style = {
+        textPx: READING_TEXT_PX, mono: true,
+        bg: "rgba(0,0,0,0.72)", fg: reading ? "#fff" : "#aaa",
+      };
+      let size = chipSize(ctx, text, style);
+      const maxW = W - 12; // 6px margins, matching the badge inset
+      if (size.w > maxW && maxW > 0) {
+        // shrink-to-fit narrow crops (padding scales with the text size)
+        style = {
+          ...style,
+          textPx: Math.max(10, Math.round(style.textPx * (maxW / size.w))),
+        };
+        size = chipSize(ctx, text, style);
+      }
+      drawChip(ctx, text, style, clamp(Math.round((W - size.w) / 2), 0, W), 6);
     }
   }
 
