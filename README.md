@@ -73,7 +73,7 @@ Pipeline scripts under `scripts/`:
 | `preprocess_pages.py` | detect table cells, reconstruct the grid, crop one image per cell, save the fitted grid geometry for reassembly |
 | `prepare_dataset.py` | write the YOLO train/val split files |
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
-| `audit_annotations.py` | model predictions over every crop (one label-audit round) |
+| `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |
 | `recombine_labels.py` | map the per-patch labels back onto the page with the saved grid geometry, one YOLO label file per page |
 
 For the annotation data layout and labeler details, see

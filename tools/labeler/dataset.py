@@ -365,7 +365,7 @@ class Dataset:
     under ``labels_root``; prediction files mirror it under two roots:
     ``predictions_root`` (the bootstrap script's model output for unlabeled
     crops) and ``audit_root`` (the audit script's model output for every
-    crop, compared against the labels). Manual-queue markers mirror it under
+    annotated crop, compared against the labels). Manual-queue markers mirror it under
     ``manual_root``: one empty ``<stem>.txt`` per crop flagged in review as
     needing manual adjustment (the prediction was discarded). Semantics
     shared with the training pipeline:

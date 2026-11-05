@@ -230,8 +230,8 @@ the decisions are identical in every ranking. Available rankings:
 ### audit (`/audit`)
 
 Find incorrect labels by comparing them against a model's predictions: run
-`just audit <model>` (`scripts/audit_annotations.py`) over the dataset, then
-resolve every disagreement here. The crop renders twice side by side —
+`just audit <model>` (`scripts/audit_annotations.py`) over the annotated crops,
+then resolve every disagreement here. The crop renders twice side by side —
 annotations on the left, model predictions on the right, each badged with
 its side (an empty side shows "(EMPTY)") — with boxes tagged as in review
 (class glyph on a large class-coloured chip, prediction confidences on a

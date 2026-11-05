@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Audit annotations: run a YOLO model over every digits crop for label review.
+"""Audit annotations: run a YOLO model over every annotated digits crop for label review.
 
 Usage:
 
     pixi run python scripts/audit_annotations.py --model runs/detect/train/weights/best.pt
 
-Runs Ultralytics detection with the given weights over **every** crop under
-``datasets/digits/images`` and writes one prediction file per crop under
-``datasets/digits/audit_predictions``, mirroring the images tree: each line
-is ``cls cx cy w h conf`` in normalised 0-1 coordinates (the YOLO label
-format plus a 6th confidence column), and a crop with no detections above
-``--conf`` gets an empty file (a predicted background crop). The labeler's
-audit stage (``tools/labeler``) compares these predictions against the
-dataset's labels and surfaces every disagreement for review.
+Runs Ultralytics detection with the given weights over **every annotated**
+crop under ``datasets/digits/images`` — a crop with a mirrored label file
+under ``datasets/digits/labels``, empty or not — and writes one prediction
+file per crop under ``datasets/digits/audit_predictions``, mirroring the
+images tree: each line is ``cls cx cy w h conf`` in normalised 0-1
+coordinates (the YOLO label format plus a 6th confidence column), and a crop
+with no detections above ``--conf`` gets an empty file (a predicted
+background crop). Unlabeled crops are skipped: the labeler's audit stage
+(``tools/labeler``) only compares predictions against labels, so a crop
+without a label has nothing to compare against. The audit stage surfaces
+every label-vs-prediction disagreement for review.
 
 One run is one review round: the audit stage deletes the prediction file of
 every crop it decides, and a fresh run re-flags whatever still disagrees.
@@ -27,7 +30,7 @@ disk — harmless to the audit stage (``tools/labeler``), which only reviews
 crops still holding an audit prediction — but the round is fully refreshed
 only once a run completes: un-reached crops keep whatever prediction state
 they had (nothing, or a previous run's files). A fresh full run overwrites
-every crop's prediction file.
+every annotated crop's prediction file.
 
 Run activity is logged to stderr and appended to ``<dataset>/audit.log``:
 initialisation (model loading, dataset scan), one line per completed batch,
@@ -184,25 +187,39 @@ def load_classes(yaml_path: Path) -> list[str]:
 
 
 def scan_images(dataset: Path) -> list[Path]:
-    """Return every crop image under ``dataset/images``, sorted by path.
+    """Return the annotated crop images under ``dataset/images``, sorted by path.
 
-    The audit round covers the whole dataset — annotated or not — because
-    the comparison against labels happens later, in the labeler's audit
-    stage. Same crop convention as ``scripts/bootstrap_annotations.py``.
+    A crop is annotated iff its mirrored label file (the image path's ``images``
+    tree mapped onto the sibling ``labels`` tree with the suffix changed to
+    ``.txt``) exists; an empty label file counts as annotated (an annotated
+    background crop). Only annotated crops are audited: the labeler's audit
+    stage compares predictions against labels, so a crop without a label has
+    nothing to compare against and is skipped. This is the same annotation
+    convention as ``scripts/bootstrap_annotations.py:scan_dataset`` and
+    ``scripts/prepare_dataset.find_labeled_images``.
 
     Args:
-        dataset: Dataset root containing the ``images`` tree.
+        dataset: Dataset root containing the ``images`` and ``labels`` trees.
 
     Returns:
-        All crop image paths, sorted by path for deterministic output.
+        Annotated crop image paths, sorted by path for deterministic output.
 
     Raises:
-        ValueError: If the ``images`` tree is missing.
+        ValueError: If the ``images`` or ``labels`` tree is missing.
     """
     images_root = dataset / "images"
+    labels_root = dataset / "labels"
     if not images_root.is_dir():
         raise ValueError(f"images directory not found: {images_root}")
-    return sorted(p for p in images_root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES)
+    if not labels_root.is_dir():
+        raise ValueError(f"labels directory not found: {labels_root}")
+    return sorted(
+        p
+        for p in images_root.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() in IMAGE_SUFFIXES
+        and (labels_root / p.relative_to(images_root).with_suffix(".txt")).is_file()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -305,16 +322,19 @@ def write_prediction(path: Path, boxes: list[Prediction]) -> None:
 
 
 def prune_stale(predictions_root: Path, targets: list[Path], images_root: Path) -> int:
-    """Delete audit prediction files whose crop is gone; return the count.
+    """Delete audit prediction files whose crop is gone or not annotated; return the count.
 
-    Keeps ``audit_predictions/`` owned by this script: every file mirrors a
-    current crop. Files for crops the user decided are already deleted by the
-    audit stage and stay gone until the next run. Only ``.txt`` files are
-    touched.
+    Keeps ``audit_predictions/`` owned by this script: after a run every file
+    mirrors a currently annotated crop. Files for crops the user decided are
+    already deleted by the audit stage and stay gone until the next run;
+    files for crops that are no longer (or never were) annotated are pruned
+    too, so the tree matches the crops this run predicts. Only ``.txt``
+    files are touched.
 
     Args:
         predictions_root: The ``audit_predictions`` tree to prune.
-        targets: The images that received predictions in this run.
+        targets: The images that received predictions in this run (the
+            annotated crops).
         images_root: The ``images`` tree that ``predictions_root`` mirrors.
 
     Returns:
@@ -336,7 +356,7 @@ def prune_stale(predictions_root: Path, targets: list[Path], images_root: Path) 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the audit script."""
     parser = argparse.ArgumentParser(
-        description="Run a trained YOLO model over every crop and write audit predictions for label review.",
+        description="Run a trained YOLO model over every annotated crop and write audit predictions for label review.",
     )
     parser.add_argument("--model", type=Path, required=True, help="trained YOLO weights (.pt)")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_DIR, help="dataset root (default: %(default)s)")
@@ -355,7 +375,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Predict boxes for every crop and write the audit prediction files.
+    """Predict boxes for every annotated crop and write the audit prediction files.
 
     Logging is configured first from ``--log-level`` (stderr plus the appended
     ``<dataset>/audit.log``); the run summary still goes to stdout. Crops are
@@ -378,7 +398,7 @@ def main() -> None:
     logger.info("model=%s dataset=%s conf=%g batch_size=%d", args.model, dataset, args.conf, args.batch_size)
 
     targets = scan_images(dataset)
-    logger.info("scan: %d crops", len(targets))
+    logger.info("scan: %d annotated crops", len(targets))
 
     predictions_root = dataset / "audit_predictions"
     if targets:
@@ -397,11 +417,11 @@ def main() -> None:
                 logger.debug("%s: %d boxes -> %s", image, len(boxes), pred_path)
                 n_boxes += len(boxes)
             logger.info("batch %d: %d images, %d boxes so far", i, len(batch), n_boxes)
-        logger.info("done: %d images / %d boxes -> %s", len(targets), n_boxes, predictions_root)
-        print(f"{len(targets)} images / {n_boxes} boxes -> {predictions_root}")
+        logger.info("done: %d annotated crops / %d boxes -> %s", len(targets), n_boxes, predictions_root)
+        print(f"{len(targets)} annotated crops / {n_boxes} boxes -> {predictions_root}")
     else:
-        logger.info("nothing to do: no crops under %s", dataset / "images")
-        print(f"nothing to do: no crops under {dataset / 'images'}")
+        logger.info("nothing to do: no annotated crops under %s", dataset / "images")
+        print(f"nothing to do: no annotated crops under {dataset / 'images'}")
     removed = prune_stale(predictions_root, targets, dataset / "images")
     if removed:
         logger.info("pruned %d stale audit prediction files", removed)
