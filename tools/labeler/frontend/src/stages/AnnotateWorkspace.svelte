@@ -4,8 +4,8 @@
    *
    * Image-pixel editing with a sticky current class, 600 ms debounced
    * autosave, 100-deep undo, view-mode filtering of prev/next
-   * (all → annotated → non-annotated), and localStorage resume. Boxes live
-   * here and are edited through the shared BoxEditor. The queue is served
+   * (all → annotated → non-annotated → manual), and localStorage resume.
+   * Boxes live here and are edited through the shared BoxEditor. The queue is served
    * manual-first — crops flagged in review as needing manual adjustment lead
    * the listing, so fresh sessions and prev/next reach them before the
    * backlog — and a flagged crop on display shows a `NEEDS MANUAL` badge
@@ -22,13 +22,17 @@
   const FILTER_CYCLE: Record<FilterMode, FilterMode> = {
     all: "annotated",
     annotated: "non-annotated",
-    "non-annotated": "all",
+    "non-annotated": "manual",
+    manual: "all",
   };
 
   /** Initial view mode from localStorage; unknown values degrade to "all". */
   function loadFilterMode(): FilterMode {
     const raw = localStorage.getItem("labeler.annotate.filterMode");
-    return raw === "all" || raw === "annotated" || raw === "non-annotated"
+    return raw === "all" ||
+      raw === "annotated" ||
+      raw === "non-annotated" ||
+      raw === "manual"
       ? raw
       : "all";
   }
@@ -75,6 +79,7 @@
   function visible(e: ImageEntry): boolean {
     if (filterMode === "annotated") return e.done;
     if (filterMode === "non-annotated") return !e.done;
+    if (filterMode === "manual") return e.manual;
     return true;
   }
 
@@ -255,8 +260,8 @@
   }
 
   /**
-   * Cycle the view mode all → annotated → non-annotated (persisted); the
-   * displayed crop stays put, the mode only restricts prev/next.
+   * Cycle the view mode all → annotated → non-annotated → manual (persisted);
+   * the displayed crop stays put, the mode only restricts prev/next.
    */
   async function cycleFilter(): Promise<void> {
     if (!(await flushSave())) return;

@@ -40,8 +40,10 @@ export type Listing = {
   manual: number;
 };
 
-/** Navigation filter over the queue (prev/next predicate, not a view). */
-export type FilterMode = "all" | "annotated" | "non-annotated";
+/** Navigation filter over the queue (prev/next predicate, not a view).
+ *  `manual` restricts prev/next to the manual queue (flagged in review as
+ *  needing manual adjustment, not yet labeled). */
+export type FilterMode = "all" | "annotated" | "non-annotated" | "manual";
 
 /** One review-queue entry (mirrors the server's queue_and_stale entries):
  *  `boxes` counts predicted boxes (null for a malformed file), `error` carries

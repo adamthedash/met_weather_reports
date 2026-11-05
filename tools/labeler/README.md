@@ -124,21 +124,23 @@ Crops, zoom and view mode resume where you left off (`localStorage`, keys
 | `z` | undo (100 steps) |
 | `⌫` / `Del` | delete selected box |
 | `Esc` | cancel drag / deselect |
-| `f` | cycle view mode: all → annotated → non-annotated |
+| `f` | cycle view mode: all → annotated → non-annotated → manual |
 | `[` / `]` | zoom out / in |
 | `Ctrl+S` | save now |
 
 The view mode restricts prev/next only — the displayed crop stays put — so the
 same queue supports both fast batch runs (non-annotated) and review passes over
-already-labeled crops (annotated). Selection is anchored on the crop's path,
-never on list position: a save can never detach the displayed annotations from
-its file. A done crop with zero boxes shows an `EMPTY` badge (hidden as soon as
-a box is drawn).
+already-labeled crops (annotated). The `manual` mode confines prev/next to the
+flagged manual queue, so it can be worked to completion before the backlog.
+Selection is anchored on the crop's path, never on list position: a save can
+never detach the displayed annotations from its file. A done crop with zero
+boxes shows an `EMPTY` badge (hidden as soon as a box is drawn).
 
 Crops flagged in review as needing manual adjustment lead the queue: the
 listing serves the whole manual queue first (natural order within it, then
 everything else in natural order), so a fresh session opens the first flagged
-crop and prev/next reach every flagged crop before the backlog. A flagged crop
+crop and prev/next reach every flagged crop before the backlog. The `manual`
+view mode restricts prev/next to the flagged crops alone. A flagged crop
 on display shows a `NEEDS MANUAL` badge and the header counts what is still
 flagged; saving labels for it (including *mark empty*) clears the flag.
 
