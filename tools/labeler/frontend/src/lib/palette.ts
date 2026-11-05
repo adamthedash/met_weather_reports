@@ -46,11 +46,19 @@ export function classTextColor(cls: number): string {
     : "#111";
 }
 
-/** Keyboard shortcut character for a class name, or null when it has none. */
-export function shortcutFor(name: string): string | null {
+/**
+ * Single-character glyph of a class name: "dot" is ".", "dash" is "-", and a
+ * length-1 name is itself. Null when the name has no natural glyph.
+ */
+export function classGlyph(name: string): string | null {
   if (name === "dot") return ".";
   if (name === "dash") return "-";
   return name.length === 1 ? name : null;
+}
+
+/** Keyboard shortcut character for a class name, or null when it has none. */
+export function shortcutFor(name: string): string | null {
+  return classGlyph(name);
 }
 
 /** Map every class shortcut to its class index (first class wins a key). */

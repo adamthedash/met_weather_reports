@@ -132,8 +132,11 @@ One keystroke per crop over the bootstrap predictions. Predicted boxes are
 display-only here: every box is tagged with its class on a large chip in the
 box's class colour (text colour picked for contrast against it) and the
 confidence on a separate smaller chip right-aligned at the box's top-right;
-wrong predictions are rejected and fixed in the annotate stage. The chip text
-sizes are tweakable constants in `frontend/src/lib/labels.ts`.
+wrong predictions are rejected and fixed in the annotate stage. Beside the
+image the sidebar shows the crop's whole-image predicted reading — the boxes'
+class glyphs concatenated in left-to-right box-centre order (e.g. "0.32") in
+large text — so a crop can be judged without reading each box. The text sizes
+are tweakable constants in `frontend/src/lib/labels.ts`.
 
 | Key | Action |
 |---|---|
@@ -273,7 +276,7 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/stages/audit.py` | audit stage: disagreement queue + keep/take/discard decisions |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built to `frontend/dist` |
 | `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
-| `tools/labeler/frontend/src/lib/labels.ts` | box-label chip text sizes (the tweakable constants) and chip drawing |
+| `tools/labeler/frontend/src/lib/labels.ts` | label text sizes (the tweakable constants), chip drawing, reading composition |
 | `tools/labeler/frontend/src/lib/` | geometry, palette, label chips, typed API client |
 | `tools/labeler/frontend/src/stages/` | workspace components + `registry.ts` (stage id → workspace) |
 
@@ -322,5 +325,6 @@ never filter: queue membership and decisions stay identical across them.
 - **Class set is data-driven** — editing `data.yaml` names changes the palette
   and keyboard map on the next load; ids must stay contiguous from 0.
 - **Box-label text sizes are constants** — `frontend/src/lib/labels.ts` holds
-  `LABEL_TEXT_PX` (class chip) and `CONF_TEXT_PX` (confidence chip); tweak and
+  `LABEL_TEXT_PX` (class chip), `CONF_TEXT_PX` (confidence chip) and
+  `READING_TEXT_PX` (the review sidebar's whole-image reading); tweak and
   rebuild.

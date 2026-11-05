@@ -14,12 +14,17 @@
    * labels first, ...), persisted at `localStorage` key
    * `labeler.review.ranking`; every ranking serves the same queue with the
    * same decisions and only changes which crop comes next.
+   *
+   * The sidebar shows the crop's whole-image predicted reading (the boxes'
+   * class glyphs concatenated left-to-right, e.g. "0.32") in large text
+   * beside the image, so a crop can be judged without reading each box.
    */
   import { onMount } from "svelte";
 
   import BoxEditor from "../lib/BoxEditor.svelte";
   import { api, loadImage } from "../lib/api";
   import { fromNormalized } from "../lib/boxes";
+  import { READING_TEXT_PX, readingOf } from "../lib/labels";
   import { classColor } from "../lib/palette";
   import type {
     Box, LabelError, PredBoxN, PredEntry, RankingSummary,
@@ -57,6 +62,12 @@
   const badge = $derived(
     curItem && !curItem.error && boxes.length === 0 ? "PREDICTED EMPTY" : "",
   );
+  /**
+   * Whole-image predicted reading: the boxes' class glyphs concatenated in
+   * left-to-right box-centre order (e.g. "0.32"), so the reviewer compares
+   * one big string instead of reading every box. Empty for no boxes.
+   */
+  const reading = $derived(readingOf(boxes, classes));
   const emptyNote = $derived(
     !curItem
       ? ""
@@ -386,6 +397,14 @@
       />
     </div>
     <aside>
+      <h3>reading</h3>
+      <div
+        class="reading"
+        class:placeholder={!reading}
+        style={`font-size: ${READING_TEXT_PX}px`}
+      >
+        {reading || "—"}
+      </div>
       <h3>prediction</h3>
       <ul class="boxlist">
         {#each boxes as b, i (i)}
@@ -536,6 +555,16 @@
     font-size: 11px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+    color: var(--dim);
+  }
+  /* whole-image predicted reading (size: READING_TEXT_PX in lib/labels.ts) */
+  .reading {
+    font-family: ui-monospace, monospace;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+    color: var(--text);
+  }
+  .reading.placeholder {
     color: var(--dim);
   }
   .boxlist {

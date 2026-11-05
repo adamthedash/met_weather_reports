@@ -1,17 +1,22 @@
 /**
- * Box-label chip tunables and drawing.
+ * Box-label chip tunables, drawing, and whole-image reading composition.
  *
- * The on-box label text sizes are constants so they can be tweaked without
- * touching the renderer: change one and rebuild the frontend. Chip padding
- * scales with the text size, so one knob keeps the chip proportions. Sizes
- * are screen CSS px and do not scale with the crop's zoom.
+ * The label text sizes are constants so they can be tweaked without touching
+ * the renderer: change one and rebuild the frontend. Chip padding scales with
+ * the text size, so one knob keeps the chip proportions. Sizes are screen CSS
+ * px and do not scale with the crop's zoom.
  */
+import { classGlyph } from "./palette";
+import type { Box } from "./types";
 
 /** Class-label chip text size — the bold chip on every box. */
 export const LABEL_TEXT_PX = 22;
 
 /** Confidence-chip text size — the separate prediction confidence chip. */
 export const CONF_TEXT_PX = 16;
+
+/** Whole-image reading text size — the review sidebar's big reading string. */
+export const READING_TEXT_PX = 60;
 
 /** Horizontal chip padding as a fraction of the text size. */
 const PAD_X = 0.4;
@@ -74,4 +79,21 @@ export function drawChip(
   ctx.textBaseline = "middle";
   ctx.fillText(text, x + padX, y + h / 2);
   ctx.restore();
+}
+
+/**
+ * Whole-image predicted reading of a box set: each box's class glyph (via
+ * `classGlyph`, so "dot" renders "." and "dash" renders "-") concatenated in
+ * left-to-right box-centre order with no separator, e.g. boxes 0, dot, 3, 2
+ * read "0.32". Equal centres keep their input order (stable sort); every box
+ * is included regardless of confidence. Returns "" for no boxes.
+ */
+export function readingOf(boxes: Box[], classes: string[]): string {
+  return [...boxes]
+    .sort((a, b) => a.x + a.w / 2 - (b.x + b.w / 2))
+    .map((b) => {
+      const name = classes[b.cls] ?? String(b.cls);
+      return classGlyph(name) ?? name;
+    })
+    .join("");
 }
