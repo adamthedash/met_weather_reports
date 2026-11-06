@@ -6,11 +6,13 @@ Usage:
     pixi run python scripts/preprocess_pages.py
 
 For every page image under ``--data`` (by default ``data/images``, the image
-folder written by ``scripts/scrape_zooniverse.py``) the pipeline runs
-PaddleOCR table cell detection, reconstructs the page's cell grid (spacing via
-an FFT over the detected box centres, phase via a circular mean) and crops one
-patch per grid cell to ``patches/<source-id>/<row>_<col>.png`` -- the naming
-and geometry expected by ``datasets/digits/images`` (see
+folder written by ``scripts/scrape_zooniverse.py``) the pipeline
+contrast-enhances the page with OpenCV CLAHE (``CLAHE_CLIP_LIMIT`` /
+``CLAHE_TILE_GRID_SIZE``), runs PaddleOCR table cell detection on the
+enhanced image, reconstructs the page's cell grid (spacing via an FFT over
+the detected box centres, phase via a circular mean) and crops one patch per
+grid cell from the raw page to ``patches/<source-id>/<row>_<col>.png`` -- the
+naming and geometry expected by ``datasets/digits/images`` (see
 ``tools/labeler/README.md``). ``<source-id>`` is the page image's file stem,
 used as-is: the subject id for scraped pages (``103801209``, or
 ``103801209_2`` for a subject's second page), so the ``patches/`` and ``qc/``
@@ -18,6 +20,7 @@ folders are organised by subject id.
 
 Per-page intermediates, results and QC renders go to ``qc/<source-id>/``:
 
+- ``clahe.jpg`` -- the CLAHE-enhanced page the cell detector saw
 - ``result.json`` -- the raw PaddleOCR detection result
 - ``paddle.jpg`` -- raw image with the PaddleOCR detections overlaid
 - ``cell_dist.jpg`` -- cell width/height distributions
@@ -66,6 +69,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # the pipeline renders QC JPGs headlessly
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
@@ -81,6 +85,10 @@ DEFAULT_OUT_DIR = REPO_ROOT / "data"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
 MODEL_NAME = "RT-DETR-L_wireless_table_cell_det"
+# CLAHE contrast enhancement (cv2.createCLAHE), applied to every page before
+# cell detection as in the notebooks/preprocess.py proof of concept.
+CLAHE_CLIP_LIMIT = 20
+CLAHE_TILE_GRID_SIZE = (16, 16)
 SIZE_TOL = 0.2
 EXPAND = 0.1
 MIN_PERIOD_FACTOR = 0.7
@@ -247,27 +255,63 @@ def repo_relative(path: Path) -> str:
     return relative.as_posix()
 
 
+def enhance_page(image_path: Path) -> np.ndarray:
+    """Contrast-enhance one page image with CLAHE.
+
+    The page is loaded and converted to 8-bit grayscale with PIL, then
+    ``cv2.createCLAHE`` with the ``CLAHE_CLIP_LIMIT`` /
+    ``CLAHE_TILE_GRID_SIZE`` parameters is applied to it, as in the
+    ``notebooks/preprocess.py`` proof of concept.
+
+    Args:
+        image_path: Page image to enhance, read from disk as-is.
+
+    Returns:
+        The CLAHE-enhanced page as a 2-D ``uint8`` grayscale array.
+
+    Raises:
+        OSError: If the page image cannot be read.
+    """
+    with Image.open(image_path) as img:
+        gray: np.ndarray = np.asarray(img.convert("L"))
+    clahe = cv2.createCLAHE(
+        clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_GRID_SIZE
+    )
+    return clahe.apply(gray)
+
+
 def detect_cells(
-    model: TableCellsDetection, image_path: Path, threshold: float
+    model: TableCellsDetection,
+    image: np.ndarray,
+    image_path: Path,
+    threshold: float,
 ) -> PaddleOcrResult:
-    """Run table cell detection on one page image.
+    """Run table cell detection on one page's enhanced image.
+
+    The single-channel ``image`` is expanded to three identical channels
+    before detection: the model's preprocessing expects an ``H x W x 3``
+    input, and identical channels make the BGR/RGB order irrelevant.
 
     Args:
         model: The shared ``TableCellsDetection`` model instance.
-        image_path: Page image to detect on, read from disk as-is.
+        image: The page's CLAHE-enhanced grayscale image, as returned by
+            ``enhance_page``.
+        image_path: Path of the raw page ``image`` was enhanced from;
+            recorded as the result's ``input_path``.
         threshold: Minimum confidence for a returned box.
 
     Returns:
         The page's detections in the ``PaddleOcrResult`` schema: ``input_path``
-        relative to the repository root, plain Python numbers throughout
-        (JSON-serialisable).
+        relative to the repository root (the raw page), plain Python numbers
+        throughout (JSON-serialisable).
 
     Raises:
         ValueError: If the model returns anything other than exactly one
             result for the page, or a result / box does not have the expected
             shape.
     """
-    outputs = list(model.predict(str(image_path), threshold=threshold, batch_size=1))
+    bgr: np.ndarray = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    outputs = list(model.predict(bgr, threshold=threshold, batch_size=1))
     if len(outputs) != 1:
         raise ValueError(f"expected 1 detection result, got {len(outputs)}")
 
@@ -1056,14 +1100,14 @@ def process_page(
     qc_root: Path,
     threshold: float,
 ) -> PageSummary:
-    """Run the detect -> grid -> crop pipeline for one page.
+    """Run the enhance -> detect -> grid -> crop pipeline for one page.
 
     Writes ``patches/<source-id>/<row>_<col>.png`` and the QC folder
-    ``qc/<source-id>/`` (``result.json``, ``paddle.jpg``, ``cell_dist.jpg``,
-    ``grid_phase.jpg``, ``inferred.jpg``, ``grid.json``). ``grid.json`` holds
-    the table-fitting results and is written after the patches are exported,
-    so it always describes the patch set on disk; a page rejected by the
-    minimum-grid check writes neither.
+    ``qc/<source-id>/`` (``clahe.jpg``, ``result.json``, ``paddle.jpg``,
+    ``cell_dist.jpg``, ``grid_phase.jpg``, ``inferred.jpg``, ``grid.json``).
+    ``grid.json`` holds the table-fitting results and is written after the
+    patches are exported, so it always describes the patch set on disk; a
+    page rejected by the minimum-grid check writes neither.
 
     Args:
         model: The shared ``TableCellsDetection`` model instance.
@@ -1093,7 +1137,11 @@ def process_page(
         width_px: float = float(img.width)
         height_px: float = float(img.height)
 
-    result: PaddleOcrResult = detect_cells(model, image_path, threshold)
+    enhanced: np.ndarray = enhance_page(image_path)
+    Image.fromarray(enhanced).save(qc_dir / "clahe.jpg")
+    logger.debug("%s: wrote %s", source_id, repo_relative(qc_dir / "clahe.jpg"))
+
+    result: PaddleOcrResult = detect_cells(model, enhanced, image_path, threshold)
     write_result_json(result, qc_dir / "result.json")
     logger.debug("%s: wrote %s", source_id, repo_relative(qc_dir / "result.json"))
 

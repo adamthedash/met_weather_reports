@@ -16,10 +16,10 @@ an annotated character-detection dataset:
 
 1. **Scrape** the page scans and per-subject provenance metadata from the
    Zooniverse project (`scripts/scrape_zooniverse.py`).
-2. **Preprocess** each page: detect the table cells, reconstruct the
-   day × month grid, and crop one image per cell, saving the fitted grid
-   geometry so the patches can be re-assembled after inference
-   (`scripts/preprocess_pages.py`).
+2. **Preprocess** each page: contrast-enhance the scan with CLAHE, detect
+   the table cells, reconstruct the day × month grid, and crop one image
+   per cell, saving the fitted grid geometry so the patches can be
+   re-assembled after inference (`scripts/preprocess_pages.py`).
 3. **Label** the handwritten characters in each cell crop (the class set is
    defined per dataset — currently `0-9`, `dash`, `dot`, `tr`, `x`) with the
    in-repo labeler app (`tools/labeler`).
@@ -71,7 +71,7 @@ Pipeline scripts under `scripts/`:
 | Script | Role |
 |---|---|
 | `scrape_zooniverse.py` | download page scans and metadata from the Zooniverse project |
-| `preprocess_pages.py` | detect table cells, reconstruct the grid, crop one image per cell, save the fitted grid geometry for reassembly |
+| `preprocess_pages.py` | contrast-enhance each page with CLAHE, detect table cells, reconstruct the grid, crop one image per cell, save the fitted grid geometry for reassembly |
 | `prepare_dataset.py` | write the YOLO train/val split files |
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
 | `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |
