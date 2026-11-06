@@ -28,7 +28,8 @@ an annotated character-detection dataset:
    (`scripts/bootstrap_annotations.py`, `scripts/audit_annotations.py`,
    `notebooks/yolo.py`).
 5. **Recombine** the accepted per-patch labels back onto the pages with the
-   grid geometry saved in step 2, one YOLO label file per page
+   grid geometry saved in step 2, one YOLO label file per page plus a
+   per-page sidecar recording the confirmed-empty cell regions
    (`scripts/recombine_labels.py`).
 
 Exploratory work behind the pipeline stages lives in marimo notebooks.
@@ -74,7 +75,7 @@ Pipeline scripts under `scripts/`:
 | `prepare_dataset.py` | write the YOLO train/val split files |
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
 | `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |
-| `recombine_labels.py` | map the per-patch labels back onto the page with the saved grid geometry, one YOLO label file per page |
+| `recombine_labels.py` | map the per-patch labels back onto the page with the saved grid geometry, one YOLO label file per page, plus one `<source-id>.empty.json` sidecar per page recording the cell regions annotated as empty |
 
 For the annotation data layout and labeler details, see
 [`tools/labeler/README.md`](tools/labeler/README.md).
