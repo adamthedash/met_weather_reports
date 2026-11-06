@@ -137,6 +137,9 @@ Draw character boxes on the crops. The current class is sticky: pick a class
 once (key or palette chip) and every new box inherits it. Coordinates are
 image pixels on screen, normalised on save; edits autosave 600 ms after the
 last change, are flushed before navigating, and are guarded by `beforeunload`.
+While a box is being dragged out, a class-coloured outline follows the pointer
+(no fill, no label), so the shape can be judged before release; the box is
+only committed on mouse-up.
 Zoom is free (0.05×–24×), so any image size works from cell crops to
 full-page scans: while no magnification is pinned, every image opens fitted
 to the canvas area; the first zoom action (`[`/`]`, `−`/`+`) pins one across

@@ -284,6 +284,32 @@
     }
   }
 
+  /**
+   * Outline of the box being dragged out.
+   *
+   * Unlike a committed box this is stroked only — never filled and never
+   * labelled — so the handwriting underneath stays readable while the shape
+   * is still provisional. It follows the class colour and 2 px stroke of a
+   * finished box; the box itself enters `boxes` only on mouse-up.
+   */
+  function drawDragPreview(
+    ctx: CanvasRenderingContext2D,
+    start: Pt,
+    cur: Pt,
+  ): void {
+    const cls = currentClass;
+    if (cls === null) return;
+    const z = zoom;
+    const x = Math.min(start.x, cur.x) * z;
+    const y = Math.min(start.y, cur.y) * z;
+    const w = Math.abs(cur.x - start.x) * z;
+    const h = Math.abs(cur.y - start.y) * z;
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = classColor(cls);
+    ctx.strokeRect(x, y, w, h);
+  }
+
   /** Draw the image and its boxes (label chips, handles, badge, reading). */
   function render(): void {
     const ctx = cv.getContext("2d");
@@ -341,6 +367,13 @@
         }
       }
     });
+
+    // in-progress draw gesture: an outline previews the box being dragged
+    // out (above the committed boxes, below the fixed chips); it enters
+    // `boxes` only on mouse-up
+    if (op?.type === "draw" && op.moved) {
+      drawDragPreview(ctx, op.start, op.cur);
+    }
 
     // fixed-size badge in the image's top-left corner ("EMPTY" for crops that
     // are done but hold no boxes, "PREDICTED EMPTY" for predicted background);
