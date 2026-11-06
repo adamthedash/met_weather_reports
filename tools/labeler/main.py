@@ -9,14 +9,10 @@ import uvicorn
 
 from tools.labeler.app import create_app
 from tools.labeler.config import (
-    DEFAULT_AUDIT_PREDICTIONS_ROOT,
-    DEFAULT_DATA_YAML,
-    DEFAULT_IMAGES_ROOT,
-    DEFAULT_LABELS_ROOT,
-    DEFAULT_MANUAL_ROOT,
-    DEFAULT_PREDICTIONS_ROOT,
     FRONTEND_DIST,
     Config,
+    default_dataset,
+    dataset_paths,
 )
 
 
@@ -26,40 +22,53 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help="dataset root directory: derives the images/labels/manual/"
+        "predictions/audit_predictions roots and data.yaml from its standard "
+        "layout (default: $LABELER_DATASET or datasets/digits)",
+    )
+    ap.add_argument(
         "--images",
         type=Path,
-        default=DEFAULT_IMAGES_ROOT,
-        help="root directory of crop images",
+        default=None,
+        help="root directory of crop images (default: <dataset>/images)",
     )
     ap.add_argument(
         "--labels",
         type=Path,
-        default=DEFAULT_LABELS_ROOT,
-        help="output root for YOLO label files (mirrors the images tree)",
+        default=None,
+        help="output root for YOLO label files (mirrors the images tree; "
+        "default: <dataset>/labels)",
     )
     ap.add_argument(
         "--manual",
         type=Path,
-        default=DEFAULT_MANUAL_ROOT,
-        help="root of the manual-queue marker files (mirrors the images tree)",
+        default=None,
+        help="root of the manual-queue marker files (mirrors the images tree; "
+        "default: <dataset>/manual)",
     )
     ap.add_argument(
         "--predictions",
         type=Path,
-        default=DEFAULT_PREDICTIONS_ROOT,
-        help="root of the prediction files to review (mirrors the images tree)",
+        default=None,
+        help="root of the prediction files to review (mirrors the images tree; "
+        "default: <dataset>/predictions)",
     )
     ap.add_argument(
         "--audit-predictions",
         type=Path,
-        default=DEFAULT_AUDIT_PREDICTIONS_ROOT,
-        help="root of the audit prediction files (mirrors the images tree)",
+        default=None,
+        help="root of the audit prediction files (mirrors the images tree; "
+        "default: <dataset>/audit_predictions)",
     )
     ap.add_argument(
         "--data-yaml",
         type=Path,
-        default=DEFAULT_DATA_YAML,
-        help="YOLO data.yaml defining the class names (must exist and parse)",
+        default=None,
+        help="YOLO data.yaml defining the class names (must exist and parse; "
+        "default: <dataset>/data.yaml)",
     )
     ap.add_argument(
         "--class-map",
@@ -78,16 +87,19 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    dataset = args.dataset if args.dataset is not None else default_dataset()
+    roots = dataset_paths(dataset)
     cfg = Config(
         host=args.host,
         port=args.port,
         dist=args.dist,
-        images_root=args.images,
-        labels_root=args.labels,
-        manual_root=args.manual,
-        predictions_root=args.predictions,
-        audit_predictions_root=args.audit_predictions,
-        data_yaml=args.data_yaml,
+        images_root=args.images or roots["images_root"],
+        labels_root=args.labels or roots["labels_root"],
+        manual_root=args.manual or roots["manual_root"],
+        predictions_root=args.predictions or roots["predictions_root"],
+        audit_predictions_root=args.audit_predictions
+        or roots["audit_predictions_root"],
+        data_yaml=args.data_yaml or roots["data_yaml"],
         class_map=args.class_map,
     )
     # strict by design: a missing images root or bad data.yaml/classes.yaml
@@ -106,6 +118,7 @@ def main() -> None:
     disagreements, compared = ds.audit_queue()
     dist_built = (cfg.dist / "index.html").is_file()
     print(f"labeler server: http://{cfg.host}:{cfg.port}")
+    print(f"  dataset: {dataset}")
     print(f"  images : {len(rels)} crops under {ds.images_root}")
     print(f"  labels : {ds.labels_root}")
     print(f"  classes: {', '.join(ds.classes)} ({len(ds.classes)})")

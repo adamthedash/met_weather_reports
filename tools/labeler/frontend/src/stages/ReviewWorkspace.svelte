@@ -26,7 +26,7 @@
 
   import BoxEditor from "../lib/BoxEditor.svelte";
   import { api, loadImage } from "../lib/api";
-  import { fromNormalized } from "../lib/boxes";
+  import { fitScale, fromNormalized } from "../lib/boxes";
   import { readingOf } from "../lib/labels";
   import { classColor } from "../lib/palette";
   import type {
@@ -90,15 +90,10 @@
   }
 
   /**
-   * Integer magnification that fits the crop into the canvas area, so pixels
-   * stay crisp; falls back to fractional scaling only for crops that would
-   * overflow at 1:1.
+   * Fit magnification (from the shared box geometry helpers): integer while
+   * the crop is magnified so pixels stay crisp, fractional only for crops
+   * that would overflow at 1:1 (full-page scans).
    */
-  function fitScale(img: HTMLImageElement, availW: number, availH: number): number {
-    const fit = Math.min(availW / img.width, availH / img.height);
-    return fit >= 1 ? Math.floor(fit) : fit;
-  }
-
   const zoom = $derived(
     img && wrapSize.w > 0 ? fitScale(img, wrapSize.w, wrapSize.h) : 1,
   );

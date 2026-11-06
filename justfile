@@ -8,28 +8,28 @@ scrape:
 preprocess:
     pixi run python scripts/preprocess_pages.py
 
-prep_dataset:
-    pixi run python scripts/prepare_dataset.py --dataset datasets/digits
+prep_dataset dataset="datasets/digits":
+    pixi run python scripts/prepare_dataset.py --dataset {{dataset}}
 
-bootstrap model conf="0.25" batch="32":
-    pixi run python scripts/bootstrap_annotations.py --model {{model}} --conf {{conf}} --batch-size {{batch}}
+bootstrap model dataset="datasets/digits" conf="0.25" batch="32":
+    pixi run python scripts/bootstrap_annotations.py --model {{model}} --dataset {{dataset}} --conf {{conf}} --batch-size {{batch}}
 
-audit model conf="0.25" batch="32":
-    pixi run python scripts/audit_annotations.py --model {{model}} --conf {{conf}} --batch-size {{batch}}
+audit model dataset="datasets/digits" conf="0.25" batch="32":
+    pixi run python scripts/audit_annotations.py --model {{model}} --dataset {{dataset}} --conf {{conf}} --batch-size {{batch}}
 
 recombine:
     pixi run python scripts/recombine_labels.py
 
 # combined labeler tool (tools/labeler): build the frontend and serve
-labeler: labeler-build
-    pixi run python -m tools.labeler
+labeler dataset="datasets/digits": labeler-build
+    pixi run python -m tools.labeler --dataset {{dataset}}
 
 labeler-build:
     cd tools/labeler/frontend && pnpm install && pnpm build
 
 # dev: API with autoreload (run 'just labeler-ui' in a second terminal)
-labeler-api:
-    pixi run uvicorn tools.labeler.app:app --host 127.0.0.1 --port 8125 --reload
+labeler-api dataset="datasets/digits":
+    LABELER_DATASET={{dataset}} pixi run uvicorn tools.labeler.app:app --host 127.0.0.1 --port 8125 --reload
 
 labeler-ui:
     cd tools/labeler/frontend && pnpm dev

@@ -1,4 +1,4 @@
-/** Box geometry: hit-testing and image-pixel/normalised conversion. */
+/** Box geometry: hit-testing, view fitting, and image-pixel/normalised conversion. */
 
 import type { Box, BoxN } from "./types";
 
@@ -11,6 +11,18 @@ export type Handle = { id: string; x: number; y: number };
 /** Clamp `v` to the range [lo, hi]. */
 export function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
+}
+
+/**
+ * Integer magnification that fits the image into the available area, so
+ * pixels stay crisp; falls back to fractional scaling only for images that
+ * would overflow at 1:1 (full-page scans need zoom below 1×).
+ */
+export function fitScale(
+  img: { width: number; height: number }, availW: number, availH: number,
+): number {
+  const fit = Math.min(availW / img.width, availH / img.height);
+  return fit >= 1 ? Math.floor(fit) : fit;
 }
 
 /** The eight resize-handle positions (corners and edge midpoints) of box `b`. */

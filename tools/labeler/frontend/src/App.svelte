@@ -2,11 +2,14 @@
   import { onMount } from "svelte";
 
   import { fetchJSON, type StageSummary } from "./lib/api";
+  import { setDatasetId } from "./lib/state";
   import { workspaces } from "./stages/registry";
 
   let stages = $state<StageSummary[]>([]);
   let status = $state("connecting…");
   let route = $state(window.location.pathname);
+  /** The health probe has reported the mounted dataset (state keys are ready). */
+  let ready = $state(false);
 
   onMount(() => {
     const onPopState = () => (route = window.location.pathname);
@@ -14,13 +17,18 @@
     void (async () => {
       try {
         const [health, list] = await Promise.all([
-          fetchJSON<{ ok: boolean; version: string }>("/api/health"),
+          fetchJSON<{ ok: boolean; version: string; dataset: string }>(
+            "/api/health",
+          ),
           fetchJSON<{ stages: StageSummary[] }>("/api/stages"),
         ]);
+        setDatasetId(health.dataset);
         stages = list.stages;
-        status = `connected · v${health.version}`;
+        status = `connected · v${health.version} · ${health.dataset}`;
       } catch (err) {
         status = `backend unreachable: ${err instanceof Error ? err.message : err}`;
+      } finally {
+        ready = true;
       }
     })();
     return () => window.removeEventListener("popstate", onPopState);
@@ -58,7 +66,9 @@
 
   {#if Workspace}
     {@const W = Workspace}
-    <W />
+    {#if ready}
+      <W />
+    {/if}
   {:else if route === "/"}
     <main class="picker">
       <h1>labeler</h1>

@@ -20,9 +20,10 @@ an annotated character-detection dataset:
    the table cells, reconstruct the day × month grid, and crop one image
    per cell, saving the fitted grid geometry so the patches can be
    re-assembled after inference (`scripts/preprocess_pages.py`).
-3. **Label** the handwritten characters in each cell crop (the class set is
-   defined per dataset — currently `0-9`, `dash`, `dot`, `tr`, `x`) with the
-   in-repo labeler app (`tools/labeler`).
+3. **Label** the handwritten characters in each cell crop — or any other
+   region of a page; the class set and its presentation are defined per
+   dataset in its `data.yaml`/`classes.yaml` — with the in-repo labeler app
+   (`tools/labeler`).
 4. **Train** a YOLO character detector over the labeled crops and use it to
    bootstrap and audit annotations at scale
    (`scripts/bootstrap_annotations.py`, `scripts/audit_annotations.py`,
@@ -59,12 +60,12 @@ Tools and technologies the pipeline is built on:
 | Entry | Role |
 |---|---|
 | `pixi.toml` / `pixi.lock` | pixi workspace `met_weather`: Python environment and dependencies |
-| `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `prep_dataset`, `bootstrap`, `audit`, `labeler`) and dev servers |
+| `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `prep_dataset`, `bootstrap`, `audit`, `labeler`) and dev servers — the dataset-taking tasks accept a `dataset=` argument (default `datasets/digits`) |
 | `scripts/` | the pipeline stages, one script each (see below) |
 | `tools/labeler/` | combined annotation web app (annotate / review / batch review / audit stages, plus a read-only dataset summary page) — details in [`tools/labeler/README.md`](tools/labeler/README.md) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built into `frontend/dist` |
 | `notebooks/` | marimo notebooks: preprocessing prototypes (`preprocess.py`, `test.py`) and YOLO training (`yolo.py`) |
-| `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata/cell patches/QC renders/per-page labels (`data/`), the digits dataset (`datasets/digits/`), model weights (`models/`), Ultralytics training runs (`runs/`) |
+| `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata/cell patches/QC renders/per-page labels (`data/`), the datasets (`datasets/digits/` character crops, `datasets/tables/` full-page table regions), model weights (`models/`), Ultralytics training runs (`runs/`) |
 
 Pipeline scripts under `scripts/`:
 

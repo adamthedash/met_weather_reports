@@ -70,8 +70,12 @@ def create_app(cfg: Config, ds: Dataset | None = None) -> FastAPI:
     # -- core API --------------------------------------------------------
     @app.get("/api/health")
     async def health() -> dict[str, object]:
-        """Liveness probe for the UI and smoke checks."""
-        return {"ok": True, "version": __version__}
+        """Liveness probe for the UI and smoke checks.
+
+        `dataset` is the id of the mounted dataset (the data.yaml directory's
+        name); the UI namespaces its persisted state with it.
+        """
+        return {"ok": True, "version": __version__, "dataset": ds.id}
 
     @app.get("/api/stages")
     async def stage_list() -> dict[str, object]:

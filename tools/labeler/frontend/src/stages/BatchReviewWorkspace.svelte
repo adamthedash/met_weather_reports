@@ -34,14 +34,15 @@
 
   import Tile from "../lib/Tile.svelte";
   import { api } from "../lib/api";
+  import { stateKey } from "../lib/state";
   import type {
     BatchDecision, BatchEntry, ClassInfo, TileMark,
   } from "../lib/types";
 
-  /** localStorage key of the persisted batch size. */
+  /** localStorage key of the persisted batch size (generic: shared). */
   const SIZE_KEY = "labeler.batch.size";
-  /** localStorage key of the persisted tile size scale. */
-  const SCALE_KEY = "labeler.batch.tile-scale";
+  /** localStorage key of the persisted tile size scale (view state: per dataset). */
+  const SCALE_KEY = stateKey("labeler.batch.tile-scale");
   /** The batch-size slider's span and its default. */
   const MIN_SIZE = 1;
   const MAX_SIZE = 32;

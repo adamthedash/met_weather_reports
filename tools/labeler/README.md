@@ -17,7 +17,8 @@ with the surrounding pipeline (`scripts/bootstrap_annotations.py`,
 ## Quick start
 
 ```sh
-just labeler        # pnpm install + vite build, then serve on http://127.0.0.1:8125
+just labeler                    # pnpm install + vite build, then serve on http://127.0.0.1:8125
+just labeler datasets/tables    # … against another dataset
 ```
 
 Open the URL in a browser (forward the port first when working over SSH).
@@ -28,37 +29,56 @@ The top bar switches between the stages (`/annotate`, `/review`,
 Development, in two terminals:
 
 ```sh
-just labeler-api    # uvicorn --reload on 127.0.0.1:8125
-just labeler-ui     # vite dev server on http://127.0.0.1:5173 (proxies /api)
+just labeler-api datasets/tables   # uvicorn --reload on 127.0.0.1:8125 (LABELER_DATASET selects the dataset)
+just labeler-ui                    # vite dev server on http://127.0.0.1:5173 (proxies /api)
 ```
 
-CLI flags (all optional):
+The tool is dataset-agnostic: it reads classes and presentation from the
+dataset's own `data.yaml`/`classes.yaml` and works over whatever image tree
+the dataset holds. CLI flags (all optional):
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--images` | `datasets/digits/images` | root directory of crop images |
-| `--labels` | `datasets/digits/labels` | output root for YOLO label files (mirrors the images tree) |
-| `--manual` | `datasets/digits/manual` | manual-queue marker files (mirrors the images tree) |
-| `--predictions` | `datasets/digits/predictions` | prediction files to review (mirrors the images tree) |
-| `--audit-predictions` | `datasets/digits/audit_predictions` | audit model output to compare against labels (mirrors the images tree) |
-| `--data-yaml` | `datasets/digits/data.yaml` | class names (file must exist and parse) |
+| `--dataset` | `$LABELER_DATASET` or `datasets/digits` | dataset root; derives every row below from its standard layout |
+| `--images` | `<dataset>/images` | root directory of images to label |
+| `--labels` | `<dataset>/labels` | output root for YOLO label files (mirrors the images tree) |
+| `--manual` | `<dataset>/manual` | manual-queue marker files (mirrors the images tree) |
+| `--predictions` | `<dataset>/predictions` | prediction files to review (mirrors the images tree) |
+| `--audit-predictions` | `<dataset>/audit_predictions` | audit model output to compare against labels (mirrors the images tree) |
+| `--data-yaml` | `<dataset>/data.yaml` | class names (file must exist and parse) |
 | `--class-map` | `classes.yaml` next to `--data-yaml` | class presentation: display glyph + keyboard shortcut per class (file must exist and parse) |
 | `--host` | `127.0.0.1` | bind address |
 | `--port` | `8125` | port |
 | `--dist` | `tools/labeler/frontend/dist` | built frontend directory |
 
+Each root flag overrides the corresponding `--dataset` derivation
+individually, for non-standard layouts. `just labeler <dataset>` passes
+`--dataset` through; `just labeler-api <dataset>` sets the `LABELER_DATASET`
+environment variable (the fallback of `--dataset` itself, there for entry
+points that cannot pass flags).
+
 ## Data layout
 
 ```
-datasets/digits/
-├── data.yaml                              # classes: 0-9, dash, dot, tr, x
+datasets/<name>/
+├── data.yaml                              # class names (the names: mapping)
 ├── classes.yaml                           # class presentation: glyph + keyboard shortcut per class
-├── images/<source-id>/<r>_<c>.png         # one crop per table cell
-├── labels/<source-id>/<r>_<c>.txt         # YOLO labels (5 columns)
-├── manual/<source-id>/<r>_<c>.txt         # manual-queue marker (empty file)
-├── predictions/<source-id>/<r>_<c>.txt    # bootstrap model output (6 columns)
-└── audit_predictions/<source-id>/<r>_<c>.txt  # audit model output (6 columns)
+├── images/…                               # the images to label: any tree of .png/.jpg/.jpeg/.bmp/.webp
+├── labels/…                               # YOLO labels (5 columns), mirroring the images tree
+├── manual/…                               # manual-queue markers (empty files), mirroring the images tree
+├── predictions/…                          # bootstrap model output (6 columns), mirroring the images tree
+└── audit_predictions/…                    # audit model output (6 columns), mirroring the images tree
 ```
+
+The images tree is whatever the dataset needs, and the sidecar trees mirror
+it one-to-one (`<stem>.txt` in the same subdirs). Two worked shapes:
+
+- `datasets/digits` — one crop per table cell:
+  `images/<source-id>/<r>_<c>.png`, classes `0-9`, `dash`, `dot`, `tr`, `x`,
+  `ticks`.
+- `datasets/tables` — one full scanned page per image:
+  `images/<subject>.jpeg`, classes `daily`, `month_totals`, `year_total`,
+  `days_with_rainfall`.
 
 A label file holds one line per character box, normalised to 0-1 at 6 decimals:
 
@@ -117,8 +137,12 @@ Draw character boxes on the crops. The current class is sticky: pick a class
 once (key or palette chip) and every new box inherits it. Coordinates are
 image pixels on screen, normalised on save; edits autosave 600 ms after the
 last change, are flushed before navigating, and are guarded by `beforeunload`.
-Crops, zoom and view mode resume where you left off (`localStorage`, keys
-`labeler.annotate.*`).
+Zoom is free (0.05×–24×), so any image size works from cell crops to
+full-page scans: while no magnification is pinned, every image opens fitted
+to the canvas area; the first zoom action (`[`/`]`, `−`/`+`) pins one across
+crops and sessions, and the `fit` button returns to auto-fitting. Crops, zoom
+and view mode resume where you left off (`localStorage`, keys
+`labeler.annotate.*`; crop- and view-shaped state is namespaced per dataset).
 
 | Key | Action |
 |---|---|
@@ -340,7 +364,8 @@ nothing written. Three panels:
   empty/ignored alongside as its own row (a crop count, not a box count).
 - **per-subject distribution** — one row per subject (the crop folder's
   `<source-id>`, so a second page's `<subject>_2` folder is a subject of its
-  own; crops directly under the images root group as `(root)`) in natural
+  own; a crop directly under the images root is a subject of its own — its
+  file stem, so in a flat dataset each image is a source page) in natural
   order, with the crop counts and the full per-class box breakdown.
 
 Malformed label files and label files mirroring no crop image (what
@@ -360,7 +385,7 @@ Core routes:
 
 | Route | Returns |
 |---|---|
-| `GET /api/health` | `{"ok": true, "version": …}` |
+| `GET /api/health` | `{"ok": true, "version": …, "dataset": …}` — `dataset` is the mounted dataset's id (the `data.yaml` directory's name), used by the UI to namespace its persisted state |
 | `GET /api/stages` | `{"stages": [{id, title, description}]}` |
 | `GET /api/classes` | `{"classes": [{"name", "glyph", "key"}]}` — one entry per class: `name` from `data.yaml`, `glyph` (display) and `key` (annotate shortcut, `null` for a click-only class) from `classes.yaml`, both strict |
 | `GET /api/image?path=` | raw crop image bytes |
@@ -415,7 +440,7 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 |---|---|
 | `tools/labeler/app.py` | ASGI app: core `/api` routes, stage routers, built frontend at `/` |
 | `tools/labeler/main.py` | CLI flags, startup summary, uvicorn bootstrap |
-| `tools/labeler/config.py` | `Config`: bind address, dist, dataset roots |
+| `tools/labeler/config.py` | `Config` + the dataset layout derivation (`--dataset` / `LABELER_DATASET`): bind address, dist, dataset roots |
 | `tools/labeler/dataset.py` | `Dataset` + helpers: classes and their presentation, image listing, label/manual-marker/prediction I/O |
 | `tools/labeler/compare.py` | model-vs-label comparison: greedy IoU pairing + disagreement issues |
 | `tools/labeler/rankings.py` | review queue rankings: pluggable presentation order (natural, rare labels, gap filling) |
@@ -431,7 +456,7 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 | `tools/labeler/frontend/src/lib/BoxEditor.svelte` | shared canvas engine (draw/move/resize/delete, read-only mode) |
 | `tools/labeler/frontend/src/lib/Tile.svelte` | batch grid tile: read-only crop + predicted boxes + reading, click-to-mark chrome |
 | `tools/labeler/frontend/src/lib/labels.ts` | label text sizes (the tweakable constants), chip drawing, reading composition |
-| `tools/labeler/frontend/src/lib/` | geometry, palette, label chips, typed API client |
+| `tools/labeler/frontend/src/lib/` | geometry (incl. view fitting), palette, label chips, per-dataset state keys, typed API client |
 | `tools/labeler/frontend/src/stages/` | workspace components + `registry.ts` (stage id → workspace) |
 
 ## Toolchains

@@ -5,7 +5,11 @@
    * Image-pixel editing with a sticky current class, 600 ms debounced
    * autosave, 100-deep undo, view-mode filtering of prev/next
    * (all → annotated → non-annotated → manual), and localStorage resume.
-   * Boxes live here and are edited through the shared BoxEditor. The queue is served
+   * Free zoom (0.05×–24×) covers any image size: while no magnification is
+   * pinned every image opens fitted to the canvas area, and any zoom action
+   * pins one across crops and sessions (the `fit` button returns to
+   * auto-fitting). Boxes live here and are edited through the shared
+   * BoxEditor. The queue is served
    * manual-first — crops flagged in review as needing manual adjustment lead
    * the listing, so fresh sessions and prev/next reach them before the
    * backlog — and a flagged crop on display shows a `NEEDS MANUAL` badge
@@ -15,8 +19,9 @@
 
   import BoxEditor from "../lib/BoxEditor.svelte";
   import { api, loadImage } from "../lib/api";
-  import { fromNormalized, toNormalized } from "../lib/boxes";
+  import { fitScale, fromNormalized, toNormalized } from "../lib/boxes";
   import { classColor } from "../lib/palette";
+  import { stateKey } from "../lib/state";
   import type { Box, ClassInfo, FilterMode, ImageEntry } from "../lib/types";
 
   const FILTER_CYCLE: Record<FilterMode, FilterMode> = {
@@ -26,9 +31,15 @@
     manual: "all",
   };
 
+  /** Persisted annotate state keys: zoom and last crop are per dataset,
+   *  the view-mode preference is generic and shared. */
+  const ZOOM_KEY = stateKey("labeler.annotate.zoom");
+  const LAST_PATH_KEY = stateKey("labeler.annotate.lastPath");
+  const FILTER_KEY = "labeler.annotate.filterMode";
+
   /** Initial view mode from localStorage; unknown values degrade to "all". */
   function loadFilterMode(): FilterMode {
-    const raw = localStorage.getItem("labeler.annotate.filterMode");
+    const raw = localStorage.getItem(FILTER_KEY);
     return raw === "all" ||
       raw === "annotated" ||
       raw === "non-annotated" ||
@@ -47,8 +58,12 @@
   let selected = $state(-1);
   let currentClass = $state<number | null>(null);
   let undoStack: Box[][] = [];
-  let zoom = $state(8);
-  let zoomInit = localStorage.getItem("labeler.annotate.zoom") !== null;
+  const MIN_ZOOM = 0.05;
+  const MAX_ZOOM = 24;
+  let zoom = $state(1);
+  /** Whether the user pinned a magnification (persisted per dataset); with
+   *  no pinned zoom every image opens fitted to the canvas area. */
+  let zoomPinned = localStorage.getItem(ZOOM_KEY) !== null;
   let img = $state<HTMLImageElement | null>(null);
   let dirty = $state(false);
   let saveTimer = $state<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -58,7 +73,25 @@
   });
   let editor = $state<{ cancelOp(): void } | undefined>(undefined);
 
-  if (zoomInit) zoom = Number(localStorage.getItem("labeler.annotate.zoom")) || 8;
+  let wrapEl = $state<HTMLDivElement | undefined>(undefined);
+  let wrapSize = $state({ w: 0, h: 0 });
+
+  /** Track the canvas area size (the unpinned zoom fits each image into it). */
+  function syncWrap(): void {
+    if (!wrapEl) return;
+    const cs = getComputedStyle(wrapEl);
+    wrapSize = {
+      w: wrapEl.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+      h: wrapEl.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+    };
+  }
+
+  if (zoomPinned) {
+    zoom = Math.min(
+      MAX_ZOOM,
+      Math.max(MIN_ZOOM, Number(localStorage.getItem(ZOOM_KEY)) || 8),
+    );
+  }
 
   // -- derived view state -----------------------------------------------
   const curEntry = $derived(
@@ -117,7 +150,7 @@
       if (c.key !== null) shortcutMap[c.key] = i;
     });
     images = listing.images;
-    const last = localStorage.getItem("labeler.annotate.lastPath");
+    const last = localStorage.getItem(LAST_PATH_KEY);
     const restored =
       images.find((e) => e.path === last) ?? images.find(visible) ?? null;
     currentPath = restored ? restored.path : null;
@@ -141,7 +174,7 @@
       );
       return;
     }
-    localStorage.setItem("labeler.annotate.lastPath", e.path);
+    localStorage.setItem(LAST_PATH_KEY, e.path);
     try {
       const [labels, im] = await Promise.all([
         api.labels(e.path),
@@ -150,9 +183,11 @@
       if (seq !== loadSeq) return; // superseded by a newer load
       img = im;
       boxes = labels.boxes.map((b) => fromNormalized(b, im.width, im.height));
-      if (!zoomInit && im.height > 0) {
-        zoom = Math.min(16, Math.max(2, Math.floor(420 / im.height)));
-        zoomInit = true;
+      if (!zoomPinned && wrapSize.w > 0) {
+        zoom = Math.min(
+          MAX_ZOOM,
+          Math.max(MIN_ZOOM, fitScale(im, wrapSize.w, wrapSize.h)),
+        );
       }
       setStatus("");
     } catch (err) {
@@ -278,7 +313,7 @@
   async function cycleFilter(): Promise<void> {
     if (!(await flushSave())) return;
     filterMode = FILTER_CYCLE[filterMode];
-    localStorage.setItem("labeler.annotate.filterMode", filterMode);
+    localStorage.setItem(FILTER_KEY, filterMode);
     if (!curEntry) {
       // nothing on display (empty view) — jump to the first visible crop
       const first = images.find(visible) ?? null;
@@ -331,11 +366,29 @@
     assignClass(shortcutMap[key]);
   }
 
-  /** Set the zoom level (clamped and persisted). */
+  /** Set the zoom level (clamped and persisted): pinning the magnification. */
   function setZoom(z: number): void {
-    zoom = Math.min(24, Math.max(2, z));
-    zoomInit = true;
-    localStorage.setItem("labeler.annotate.zoom", String(zoom));
+    zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+    zoomPinned = true;
+    localStorage.setItem(ZOOM_KEY, String(zoom));
+  }
+
+  /** Zoom one step: ±1× magnified, ×1.25 finer below 2× (page-sized images). */
+  function stepZoom(dir: 1 | -1): void {
+    setZoom(zoom >= 2 ? zoom + dir : dir > 0 ? zoom * 1.25 : zoom / 1.25);
+  }
+
+  /** Fit the image to the canvas area and resume auto-fitting every image. */
+  function fitToWindow(): void {
+    if (!img) return;
+    if (wrapSize.w > 0) {
+      zoom = Math.min(
+        MAX_ZOOM,
+        Math.max(MIN_ZOOM, fitScale(img, wrapSize.w, wrapSize.h)),
+      );
+    }
+    zoomPinned = false;
+    localStorage.removeItem(ZOOM_KEY);
   }
 
   // -- keys -------------------------------------------------------------
@@ -400,10 +453,10 @@
         void cycleFilter();
         break;
       case "[":
-        setZoom(zoom - 1);
+        stepZoom(-1);
         break;
       case "]":
-        setZoom(zoom + 1);
+        stepZoom(1);
         break;
       case "Escape":
         editor?.cancelOp();
@@ -420,13 +473,16 @@
   }
 
   onMount(() => {
+    syncWrap();
     void loadList().catch((err) =>
       setStatus("startup failed: " + errMsg(err), "error"),
     );
   });
+  /** Zoom readout at readable precision (0.13×, 2.27×, 8×). */
+  const zoomLabel = $derived(`${Math.round(zoom * 100) / 100}×`);
 </script>
 
-<svelte:window onkeydown={onKey} onbeforeunload={onBeforeUnload} />
+<svelte:window onkeydown={onKey} onresize={syncWrap} onbeforeunload={onBeforeUnload} />
 
 <div class="workspace">
   <header>
@@ -464,9 +520,16 @@
       <button class:on={filterMode !== "all"} onclick={() => void cycleFilter()}>
         view: {filterMode} <kbd>f</kbd>
       </button>
-      <button onclick={() => setZoom(zoom - 1)}>− <kbd>[</kbd></button>
-      <span class="zoom-label">{img ? `${zoom}× · ${img.width}×${img.height} px` : ""}</span>
-      <button onclick={() => setZoom(zoom + 1)}>+ <kbd>]</kbd></button>
+      <button onclick={() => stepZoom(-1)}>− <kbd>[</kbd></button>
+      <span class="zoom-label">{img ? `${zoomLabel} · ${img.width}×${img.height} px` : ""}</span>
+      <button onclick={() => stepZoom(1)}>+ <kbd>]</kbd></button>
+      <button
+        onclick={() => fitToWindow()}
+        disabled={!img}
+        title="fit to window and auto-fit every image"
+      >
+        fit
+      </button>
       <span class="spacer"></span>
       <span class="status" class:ok={status.kind === "ok"} class:error={status.kind === "error"}>
         {status.msg}
@@ -489,7 +552,7 @@
   </header>
 
   <main>
-    <div class="canvas-wrap">
+    <div class="canvas-wrap" bind:this={wrapEl}>
       <BoxEditor
         bind:this={editor}
         bind:boxes

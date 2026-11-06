@@ -141,7 +141,7 @@
     // a press outside the selected box deselects and draws a new box
     selected = -1;
     if (currentClass === null) {
-      onstatus("pick a class first: press 0-9, . or - or click a chip", "error");
+      onstatus("pick a class first: press its key or click a chip", "error");
       return;
     }
     op = { type: "draw", start: p, cur: p, moved: false };

@@ -25,8 +25,6 @@ from tools.labeler.errors import ApiError
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 MAX_BOXES = 64
-# subject id of a crop sitting directly under the images root (no subfolder)
-ROOT_SUBJECT_ID = "(root)"
 _NUM_RE = re.compile(r"(\d+)")
 
 
@@ -71,8 +69,9 @@ class SummaryTotals(TypedDict):
 class SummarySubject(TypedDict):
     """One subject row of :meth:`Dataset.summary`.
 
-    The crop counts of one subject (a source page's crop folder) plus its
-    labeled boxes per class (``class_counts`` parallels ``classes``).
+    The crop counts of one subject (a source page's crop folder — or the
+    page's own image in a flat dataset) plus its labeled boxes per class
+    (``class_counts`` parallels ``classes``).
     """
 
     id: str
@@ -357,6 +356,10 @@ def safe_path(root: Path, rel: str) -> Path:
 class Dataset:
     """One dataset: crop images root, label files root, class names and presentation.
 
+    `id` is the dataset's short name (the data.yaml directory's name, e.g.
+    ``digits`` or ``tables``): stable per dataset, it namespaces the UI's
+    persisted state and is reported by ``GET /api/health``.
+
     `classes` is the ``data.yaml`` class set (the id → name mapping label
     files index); `display` is the parallel ``classes.yaml`` presentation
     (glyph, keyboard shortcut) the frontend renders and keys by.
@@ -377,6 +380,7 @@ class Dataset:
       from the review queue, listed first in annotate
     """
 
+    id: str
     images_root: Path
     labels_root: Path
     manual_root: Path
@@ -852,8 +856,9 @@ class Dataset:
         annotate stage lists and ``scripts/prepare_dataset.py`` trains on.
         Every crop is grouped under its **subject**: the first path component
         of its relative path (``images/<source-id>/…``, so a second page's
-        ``<subject>_2`` folder is a subject of its own), or
-        ``ROOT_SUBJECT_ID`` for a crop sitting directly under the images root.
+        ``<subject>_2`` folder is a subject of its own), or its own file stem
+        for a crop sitting directly under the images root (in a flat dataset
+        each image is a source page of its own).
         The mirrored label file then decides the crop's state with the shared
         dataset semantics: absent → `unlabeled`, empty → `annotated` and
         `empty`, non-empty → `annotated` with its boxes counted per class.
@@ -886,7 +891,7 @@ class Dataset:
         for rel in self.list_images():
             p = Path(rel)
             image_stems.add(p.with_suffix("").as_posix())
-            subject_id = p.parts[0] if len(p.parts) > 1 else ROOT_SUBJECT_ID
+            subject_id = p.parts[0] if len(p.parts) > 1 else p.stem
             row = subjects.setdefault(
                 subject_id,
                 SummarySubject(
