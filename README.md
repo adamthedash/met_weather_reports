@@ -39,8 +39,10 @@ an annotated character-detection dataset:
 6. **Re-crop** the per-page labels back into per-patch labels when the patch
    cropping changes, so the annotations follow the new crops instead of being
    re-done (`scripts/crop_page_labels.py`; it reads the same `table_grid.json`
-   the patches were cut with and re-derives the confirmed-empty patches from
-   the sidecars).
+   the patches were cut with, re-derives the confirmed-empty patches from the
+   sidecars, and omits patch copies that retain less than half a box's area by
+   default — `--min-retained-area`; a patch holding only such fragments stays
+   unlabeled).
 
 Exploratory work behind the pipeline stages lives in marimo notebooks.
 
@@ -87,7 +89,7 @@ Pipeline scripts under `scripts/`:
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
 | `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |
 | `recombine_labels.py` | map the per-patch labels back onto the page with the saved `table_grid.json` geometry, one YOLO label file per page, plus one `<source-id>.empty.json` sidecar per page recording the cell regions annotated as empty |
-| `crop_page_labels.py` | map the per-page labels back onto a patch set's cell crops (the inverse of `recombine_labels.py`), one YOLO label file per patch under `data/v2_patches/labels`, with confirmed-empty patches re-derived from the `<source-id>.empty.json` sidecars |
+| `crop_page_labels.py` | map the per-page labels back onto a patch set's cell crops (the inverse of `recombine_labels.py`), one YOLO label file per patch under `data/v2_patches/labels`, with confirmed-empty patches re-derived from the `<source-id>.empty.json` sidecars; patch copies retaining less than `--min-retained-area` (default 0.5) of the box's original area are omitted, and a patch holding only such fragments stays unlabeled |
 
 For the annotation data layout and labeler details, see
 [`tools/labeler/README.md`](tools/labeler/README.md).

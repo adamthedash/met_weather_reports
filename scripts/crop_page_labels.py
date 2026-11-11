@@ -18,29 +18,34 @@ a page-normalised box is scaled by the page size and intersected with the
 patch's page-space crop rectangle (``cells[].rect``); the intersection, clipped
 to the crop rectangle, is normalised by the crop's size. Neighbouring patches
 overlap (every crop is padded), so a box near a boundary is clipped into every
-patch it touches and can appear on several patches. Such near-duplicate copies
-are kept as labeled -- the per-patch files mirror the annotations, they do not
-clean them -- but the extra copies are counted in the log and run summary so
-the duplication stays visible. A box that intersects no patch at all (an
-annotation outside the exported grid) and an intersection that clips to zero
-area -- or below the six-decimal precision the labels are written at -- are
-dropped and counted the same way. Page labels are parsed strictly per
-the annotation tool's label contract (five columns ``<class> <cx> <cy> <w>
-<h>``) and the output uses the tool's label formatting, so class ids pass
-through unchanged and the per-patch files are byte-compatible with hand-written
-crop labels.
+patch it touches and can appear on several patches. A clipped copy that retains
+less than ``--min-retained-area`` of the box's original area (half by default)
+is omitted from that patch's label: the per-patch files keep the copies where
+at least half the character is visible instead of mirroring near-duplicates of
+truncated fragments. Surviving copies that still appear on several patches are
+kept as labeled and counted in the log and run summary, together with the
+discarded partial copies, so the duplication stays visible. A box that
+intersects no patch at all (an annotation outside the exported grid) and an
+intersection that clips to zero area -- or below the six-decimal precision the
+labels are written at -- are dropped and counted the same way. Page labels are
+parsed strictly per the annotation tool's label contract (five columns
+``<class> <cx> <cy> <w> <h>``) and the output uses the tool's label formatting,
+so class ids pass through unchanged and the per-patch files are byte-compatible
+with hand-written crop labels.
 
 An empty label file says "annotated and confirmed to hold nothing", unlike an
 unlabeled patch; that state is re-derived from the page's confirmed-empty
 sidecar ``<pages>/<source-id>.empty.json`` (the ``scripts/recombine_labels.py``
-empty regions, in page-normalised coordinates). A patch that received no box
-copy is written as an empty label file exactly when its nominal cell centre --
-the kept grid line intersection its ``col``/``row`` names -- lies inside one of
-those regions; a patch that received any box copy is never written as empty,
-and every other box-free patch gets no file and stays unlabeled (unknown, never
-assumed empty). No class is involved and the class set is untouched. A source
-without its sidecar has no confirmed-empty regions and therefore never marks a
-patch empty; the missing sidecar is warned about.
+empty regions, in page-normalised coordinates). A patch that never received a
+box copy is written as an empty label file exactly when its nominal cell centre
+-- the kept grid line intersection its ``col``/``row`` names -- lies inside one
+of those regions. A patch that received any box copy is never written as empty,
+and a patch whose only copies were discarded as partial is not written either:
+it held part of an annotated character, so it gets no file and stays unlabeled
+(unknown, never assumed empty), even when its centre lies in an empty region.
+No class is involved and the class set is untouched. A source without its
+sidecar has no confirmed-empty regions and therefore never marks a patch empty;
+the missing sidecar is warned about.
 
 One run re-crops every source under ``--pages``. The output root is deleted and
 recreated at the start of every run, so no label file can survive from an older
@@ -58,10 +63,12 @@ label file is an orphan and is only warned about. Expected errors skip to the
 next source; unexpected errors abort the run immediately so bugs surface.
 
 Run activity is logged to stderr and appended to ``<out>/../crop_labels.log``:
-initialisation (class loading, label scan), every per-source pipeline step and
-written artifact at DEBUG, one line per completed source, and warnings for
-skipped or failed sources and for dropped boxes. ``--log-level`` narrows the verbosity (``DEBUG``, the
-default, shows everything); the run summary on stdout is not affected.
+initialisation (class loading, the retained-area threshold, label scan), every
+per-source pipeline step and written artifact at DEBUG, one line per completed
+source (including the partial copies discarded), and warnings for skipped or
+failed sources and for page boxes with no kept copy. ``--log-level`` narrows
+the verbosity (``DEBUG``, the default, shows everything); the run summary on
+stdout is not affected.
 """
 
 from __future__ import annotations
@@ -91,6 +98,10 @@ DEFAULT_DATA_YAML = REPO_ROOT / "datasets" / "digits" / "data.yaml"
 # The per-page geometry written by ``scripts/preprocess_pages_v2.py``. Same
 # schema as the detector pipeline's ``grid.json``, different filename.
 GRID_FILENAME = "table_grid.json"
+
+# Minimum fraction of a page box's original area a patch copy must retain to be
+# written to that patch's label file. Overridable with --min-retained-area.
+DEFAULT_MIN_RETAINED_AREA = 0.5
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
@@ -123,6 +134,18 @@ class Rect(TypedDict):
     cy: float
     w: float
     h: float
+
+
+class ClippedCopy(NamedTuple):
+    """One page box clipped to a patch crop, with how much of it survived.
+
+    ``retained_area`` is the fraction of the original box's area the clipped
+    copy keeps (``1.0`` when the box lies wholly inside the crop); the
+    retained-area threshold uses it to omit heavily truncated copies.
+    """
+
+    box: Box
+    retained_area: float
 
 
 class GridLine(TypedDict):
@@ -188,8 +211,9 @@ class SourceSummary(NamedTuple):
     n_empty: int  # patches written as empty label files (sidecar regions)
     n_unlabeled: int  # patches with no label file
     n_boxes: int  # box copies written to patch label files
-    n_duplicate_copies: int  # copies beyond the first, per page box
-    n_dropped: int  # page boxes mapping to no patch (or clipping to zero area)
+    n_duplicate_copies: int  # surviving copies beyond the first, per page box
+    n_dropped: int  # page boxes left with no surviving copy
+    n_partial_discarded: int  # copies discarded for retaining under the threshold
 
 
 # ---------------------------------------------------------------------------
@@ -624,14 +648,16 @@ def write_patch_labels(path: Path, boxes: Sequence[Box]) -> None:
 
 def map_box_to_patch(
     box: Box, rect: Sequence[int], width_px: float, height_px: float
-) -> Box | None:
+) -> ClippedCopy | None:
     """Map one page-normalised label box onto a patch crop, clipped to the crop.
 
     The patch was cropped from the page rectangle ``rect``, so the box is
     intersected with that rectangle and the intersection's edges translate by
     the rectangle's origin and scale by its size. Unlike
     ``scripts/recombine_labels.py:map_box_to_page`` the box is clipped to the
-    crop: what the patch does not contain is not labeled on it.
+    crop: what the patch does not contain is not labeled on it. The retained
+    area of the copy is returned alongside the box so the caller can decide
+    whether the visible part is worth labeling.
 
     Args:
         box: The label box in page-normalised coordinates.
@@ -641,11 +667,12 @@ def map_box_to_patch(
         height_px: Page image height in pixels.
 
     Returns:
-        The clipped box in patch-normalised coordinates, or ``None`` when the
-        box does not intersect the crop, the intersection has zero area, or
-        the clipped box degenerates to zero width or height at the label
-        files' six-decimal precision (which would write a zero-size box the
-        annotation tool rejects).
+        The clipped box in patch-normalised coordinates and the fraction of the
+        original box's area it retains, or ``None`` when the box does not
+        intersect the crop, the intersection has zero area, or the clipped box
+        degenerates to zero width or height at the label files' six-decimal
+        precision (which would write a zero-size box the annotation tool
+        rejects).
     """
     left, upper, right, lower = rect
     patch_w = right - left
@@ -666,7 +693,11 @@ def map_box_to_patch(
     h = (iy2 - iy1) / patch_h
     if round(w, 6) == 0.0 or round(h, 6) == 0.0:
         return None
-    return Box(cls=box["cls"], cx=cx, cy=cy, w=w, h=h)
+    retained_area = (ix2 - ix1) * (iy2 - iy1) / ((x2 - x1) * (y2 - y1))
+    return ClippedCopy(
+        box=Box(cls=box["cls"], cx=cx, cy=cy, w=w, h=h),
+        retained_area=retained_area,
+    )
 
 
 def grid_line_position(lines: Sequence[GridLine], index: int, name: str) -> float:
@@ -790,15 +821,19 @@ def process_source(
     patches_root: Path,
     out_dir: Path,
     n_classes: int,
+    min_retained_area: float,
 ) -> SourceSummary:
     """Re-crop one page's page-space labels onto its patch grid's crops.
 
     Loads ``<qc>/<source-id>/table_grid.json``, maps every page box onto every
-    patch crop it intersects (clipped), and writes
-    ``<out>/<source-id>/<row>_<col>.txt`` for every patch that received a box
-    copy plus an empty label file for every box-free patch whose nominal cell
-    centre lies in a confirmed-empty sidecar region. All other patches get no
-    file and stay unlabeled.
+    patch crop it intersects (clipped), drops the copies that retain less than
+    ``min_retained_area`` of the box's original area, and writes
+    ``<out>/<source-id>/<row>_<col>.txt`` for every patch that received a
+    surviving copy plus an empty label file for every patch that never received
+    a box copy and whose nominal cell centre lies in a confirmed-empty sidecar
+    region. A patch whose only copies were dropped as partial keeps no file: it
+    held part of a character, so it stays unlabeled rather than empty. All
+    other patches get no file and stay unlabeled.
 
     Args:
         source_id: The page's id (its ``<source-id>.txt`` name).
@@ -810,6 +845,9 @@ def process_source(
             exist under ``<patches>/<source-id>/``.
         out_dir: Output root for the per-patch label files.
         n_classes: Size of the dataset's class set (``data.yaml``).
+        min_retained_area: Minimum fraction of a page box's original area a
+            patch copy must retain to be written (``--min-retained-area``);
+            copies below it are omitted from that patch.
 
     Returns:
         The source's ``SourceSummary``.
@@ -840,27 +878,36 @@ def process_source(
         empty_rects = []
 
     placed: list[list[Box]] = [[] for _ in metadata["cells"]]
-    mapped: set[int] = set()
+    kept: set[int] = set()
+    fragment_cells: set[int] = set()
+    n_partial_discarded = 0
     for i, cell in enumerate(metadata["cells"]):
         for index, box in enumerate(boxes):
             copy = map_box_to_patch(box, cell["rect"], width_px, height_px)
             if copy is None:
                 continue
-            placed[i].append(copy)
-            mapped.add(index)
+            if copy.retained_area < min_retained_area:
+                fragment_cells.add(i)
+                n_partial_discarded += 1
+                continue
+            placed[i].append(copy.box)
+            kept.add(index)
     n_copies = sum(len(copies) for copies in placed)
-    n_duplicate_copies = n_copies - len(mapped)
-    n_dropped = len(boxes) - len(mapped)
+    n_duplicate_copies = n_copies - len(kept)
+    n_dropped = len(boxes) - len(kept)
 
     out_root = out_dir / source_id
     n_labeled = 0
     n_empty = 0
-    for cell, copies in zip(metadata["cells"], placed):
+    for i, (cell, copies) in enumerate(zip(metadata["cells"], placed)):
         stem = Path(cell["file"]).stem
         out_path = out_root / f"{stem}.txt"
         if copies:
             write_patch_labels(out_path, copies)
             n_labeled += 1
+            continue
+        if i in fragment_cells:
+            # Held only copies too partial to label: unknown, never empty.
             continue
         centre = nominal_cell_centre(cell, metadata)
         if any(point_in_rect(centre, rect, width_px, height_px) for rect in empty_rects):
@@ -870,7 +917,7 @@ def process_source(
     logger.debug("%s: wrote %s", source_id, repo_relative(out_root))
     if n_dropped:
         logger.warning(
-            "%s: %d page boxes dropped (no patch copy), %d copies kept",
+            "%s: %d page boxes dropped (no kept copy), %d copies kept",
             source_id,
             n_dropped,
             n_copies,
@@ -890,6 +937,7 @@ def process_source(
         n_boxes=n_copies,
         n_duplicate_copies=n_duplicate_copies,
         n_dropped=n_dropped,
+        n_partial_discarded=n_partial_discarded,
     )
 
 
@@ -919,6 +967,30 @@ def guard_out_dir(out_dir: Path, protected: Sequence[Path]) -> None:
             raise SystemExit(
                 f"--out {resolved} would delete {other}; refusing to clear it"
             )
+
+
+def retained_area_fraction(value: str) -> float:
+    """Parse and validate a ``--min-retained-area`` fraction.
+
+    Args:
+        value: The raw command-line value.
+
+    Returns:
+        The fraction as a float in ``(0, 1]``.
+
+    Raises:
+        argparse.ArgumentTypeError: If the value is not a finite number greater
+            than 0 and at most 1.
+    """
+    try:
+        fraction = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a number: {value!r}") from exc
+    if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        raise argparse.ArgumentTypeError(
+            f"must be greater than 0 and at most 1, got {value!r}"
+        )
+    return fraction
 
 
 def parse_args() -> argparse.Namespace:
@@ -957,6 +1029,15 @@ def parse_args() -> argparse.Namespace:
         help="dataset data.yaml naming the classes (default: %(default)s)",
     )
     parser.add_argument(
+        "--min-retained-area",
+        type=retained_area_fraction,
+        default=DEFAULT_MIN_RETAINED_AREA,
+        help=(
+            "fraction of a box's original area a patch copy must retain to be "
+            "written; smaller copies are discarded (default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         type=str.upper,
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -972,7 +1053,8 @@ def main() -> None:
     Logging is configured first from ``--log-level`` (stderr plus the appended
     ``<out>/../crop_labels.log``); the run summary still goes to stdout. The
     output root is then deleted and recreated, so no label file survives from
-    an older grid or a previous run. Sources that fail with an expected error
+    an older grid or a previous run. The retained-area threshold is logged and
+    applied to every box copy. Sources that fail with an expected error
     are logged and skipped and no output is written for them; sources without
     grid geometry are skipped without failing; the run summary lists every
     failure and the run exits 1 if there was any. Unexpected errors abort the
@@ -1008,6 +1090,10 @@ def main() -> None:
         logger.error("cannot load classes: %s", exc)
         raise SystemExit(f"cannot load classes: {exc}") from exc
     logger.info("%d classes from %s", len(classes), repo_relative(args.data_yaml))
+    logger.info(
+        "retained-area threshold %.3f (smaller patch copies discarded)",
+        args.min_retained_area,
+    )
 
     try:
         sources, unmappable, orphan_sidecars = scan_page_labels(pages_root)
@@ -1053,6 +1139,7 @@ def main() -> None:
                 patches_root,
                 out_dir,
                 len(classes),
+                args.min_retained_area,
             )
         except (ValueError, OSError) as exc:
             logger.warning("source %s failed: %s", source_id, exc)
@@ -1061,7 +1148,7 @@ def main() -> None:
         summaries.append(summary)
         logger.info(
             "%s: %d patches (%d labeled / %d empty / %d unlabeled), "
-            "%d boxes (%d duplicate copies, %d dropped)",
+            "%d boxes (%d duplicate copies, %d dropped, %d partial copies discarded)",
             summary.source_id,
             summary.n_patches,
             summary.n_labeled,
@@ -1070,6 +1157,7 @@ def main() -> None:
             summary.n_boxes,
             summary.n_duplicate_copies,
             summary.n_dropped,
+            summary.n_partial_discarded,
         )
 
     total_labeled = sum(s.n_labeled for s in summaries)
@@ -1078,12 +1166,14 @@ def main() -> None:
     total_boxes = sum(s.n_boxes for s in summaries)
     total_dups = sum(s.n_duplicate_copies for s in summaries)
     total_dropped = sum(s.n_dropped for s in summaries)
+    total_partial = sum(s.n_partial_discarded for s in summaries)
     run_summary = (
         f"{len(sources)} sources ({n_skipped} without new geometry) / "
         f"{len(summaries)} sources re-cropped / "
         f"{total_labeled} labeled patches, {total_empty} empty patches, "
         f"{total_unlabeled} unlabeled patches / "
-        f"{total_boxes} boxes ({total_dups} duplicate copies, {total_dropped} dropped) "
+        f"{total_boxes} boxes ({total_dups} duplicate copies, {total_dropped} dropped, "
+        f"{total_partial} partial copies discarded) "
         f"-> {out_dir} ({len(failed)} failed, "
         f"{len(orphan_sidecars)} orphan sidecars ignored)"
     )
