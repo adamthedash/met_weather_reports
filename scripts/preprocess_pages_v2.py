@@ -3,7 +3,7 @@
 
 Usage:
 
-    pixi run python scripts/preprocess_table_patches.py
+    pixi run python scripts/preprocess_pages_v2.py
 
 For every labeled page under ``--dataset`` (by default ``datasets/tables``, the
 full-page table dataset curated with the in-repo labeler) the pipeline reads

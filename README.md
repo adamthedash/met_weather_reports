@@ -20,9 +20,9 @@ an annotated character-detection dataset:
    geometry so the patches can be re-assembled after inference. Two paths
    exist: the detector pipeline contrast-enhances the scan with CLAHE,
    detects the cells and reconstructs the day × month grid
-   (`scripts/preprocess_pages.py`); the ground-truth path cuts the daily
+   (`scripts/preprocess_pages_v1.py`); the ground-truth path cuts the daily
    table's guaranteed 12 × 31 equal-cell grid from the hand-drawn `daily`
-   boxes in `datasets/tables` (`scripts/preprocess_table_patches.py`).
+   boxes in `datasets/tables` (`scripts/preprocess_pages_v2.py`).
 3. **Label** the handwritten characters in each cell crop — or any other
    region of a page; the class set and its presentation are defined per
    dataset in its `data.yaml`/`classes.yaml` — with the in-repo labeler app
@@ -76,8 +76,8 @@ Pipeline scripts under `scripts/`:
 | Script | Role |
 |---|---|
 | `scrape_zooniverse.py` | download page scans and metadata from the Zooniverse project |
-| `preprocess_pages.py` | contrast-enhance each page with CLAHE, detect table cells, reconstruct the grid, crop one image per cell, save the fitted grid geometry for reassembly |
-| `preprocess_table_patches.py` | cut the daily table's guaranteed 12 × 31 equal-cell grid from the hand-drawn `daily` boxes in `datasets/tables`, crop one image per cell, save `table_grid.json` for reassembly, and render the grid on the page as `qc/<page-id>/grid_overlay.jpg` for visual QC |
+| `preprocess_pages_v1.py` | contrast-enhance each page with CLAHE, detect table cells, reconstruct the grid, crop one image per cell, save the fitted grid geometry for reassembly |
+| `preprocess_pages_v2.py` | cut the daily table's guaranteed 12 × 31 equal-cell grid from the hand-drawn `daily` boxes in `datasets/tables`, crop one image per cell, save `table_grid.json` for reassembly, and render the grid on the page as `qc/<page-id>/grid_overlay.jpg` for visual QC |
 | `prepare_dataset.py` | write the YOLO train/val split files |
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
 | `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |

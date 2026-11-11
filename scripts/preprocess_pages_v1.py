@@ -3,7 +3,7 @@
 
 Usage:
 
-    pixi run python scripts/preprocess_pages.py
+    pixi run python scripts/preprocess_pages_v1.py
 
 For every page image under ``--data`` (by default ``data/images``, the image
 folder written by ``scripts/scrape_zooniverse.py``) the pipeline
