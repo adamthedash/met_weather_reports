@@ -41,21 +41,29 @@ def _(model):
             "augmentations": []
         }
 
-    # https://docs.ultralytics.com/usage/cfg#train-settings
-    results = model.train(
-        data="datasets/digits/data.yaml",
-        epochs=100,
-        patience=5,
-        imgsz=640, # Bigger size better for whatever reason
-        cache=True,
-        **disable_all_augmentation(),
-    )
+    def train(dataset_name: str):
+        # https://docs.ultralytics.com/usage/cfg#train-settings
+        results = model.train(
+            data=f"datasets/{dataset_name}/data.yaml",
+            project=dataset_name,
+            epochs=100,
+            patience=20,
+            imgsz=1024, # Bigger size better for whatever reason
+            cache=True,
+            **disable_all_augmentation(),
+        )
+
+    return (train,)
+
+
+@app.cell
+def _(train):
+    train("tables")
     return
 
 
 @app.cell
 def _():
-    
     return
 
 

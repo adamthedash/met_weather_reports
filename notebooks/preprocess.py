@@ -6,21 +6,61 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    from paddleocr import TableCellsDetection
+    import marimo as mo
+    from PIL import Image, ImageFilter
+    import numpy as np
+    import matplotlib.pyplot as plt
 
-    model = TableCellsDetection(
-        model_name="RT-DETR-L_wireless_table_cell_det",
-        engine="onnxruntime",
-    )
-    output = model.predict(
-        "data/210736fe-7e78-45ad-80cf-217e3acc0df3.jpeg",
-        threshold=0.3,
-        batch_size=1,
-    )
-    for res in output:
-        res.print(json_format=False)
-        res.save_to_img("./output2/")
-        res.save_to_json("./output2/res.json")
+    return Image, np, plt
+
+
+@app.cell
+def _(Image):
+    img = Image.open("data/images/103801210.jpeg").convert("L")
+    img
+    return (img,)
+
+
+@app.cell
+def _(img, np):
+    img_np = np.asarray(img)
+    img_np.shape
+    return (img_np,)
+
+
+@app.cell
+def _():
+    import cv2
+
+    return (cv2,)
+
+
+@app.cell
+def _(Image, cv2, img_np):
+    clahe = cv2.createCLAHE(clipLimit=20, tileGridSize=[16] * 2)
+    img_clahed_np = clahe.apply(img_np)
+    Image.fromarray(img_clahed_np)
+    return (img_clahed_np,)
+
+
+@app.cell
+def _(Image, cv2, img_clahed_np):
+    img_blurred_np = cv2.blur(img_clahed_np, (3, 9))
+    Image.fromarray(img_blurred_np)
+    return (img_blurred_np,)
+
+
+@app.cell
+def _():
+    from scipy.ndimage import convolve
+
+    return
+
+
+@app.cell
+def _(img_blurred_np, plt):
+    x = img_blurred_np.mean(axis=1)
+    plt.plot(x)
     return
 
 
