@@ -36,6 +36,11 @@ an annotated character-detection dataset:
    per-page sidecar recording the confirmed-empty cell regions
    (`scripts/recombine_labels.py`; it reads the ground-truth pipeline's
    `table_grid.json`).
+6. **Re-crop** the per-page labels back into per-patch labels when the patch
+   cropping changes, so the annotations follow the new crops instead of being
+   re-done (`scripts/crop_page_labels.py`; it reads the same `table_grid.json`
+   the patches were cut with and re-derives the confirmed-empty patches from
+   the sidecars).
 
 Exploratory work behind the pipeline stages lives in marimo notebooks.
 
@@ -64,12 +69,12 @@ Tools and technologies the pipeline is built on:
 | Entry | Role |
 |---|---|
 | `pixi.toml` / `pixi.lock` | pixi workspace `met_weather`: Python environment and dependencies |
-| `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `preprocess-tables`, `prep_dataset`, `bootstrap`, `audit`, `labeler`) and dev servers — the dataset-taking tasks accept a `dataset=` argument (default `datasets/digits`; `preprocess-tables` defaults to `datasets/tables`) |
+| `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `preprocess-tables`, `prep_dataset`, `bootstrap`, `audit`, `recombine`, `crop-labels`, `labeler`) and dev servers — the dataset-taking tasks accept a `dataset=` argument (default `datasets/digits`; `preprocess-tables` defaults to `datasets/tables`) |
 | `scripts/` | the pipeline stages, one script each (see below) |
 | `tools/labeler/` | combined annotation web app (annotate / review / batch review / audit stages, plus a read-only dataset summary page) — details in [`tools/labeler/README.md`](tools/labeler/README.md) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built into `frontend/dist` |
 | `notebooks/` | marimo notebooks: preprocessing prototypes (`preprocess.py`, `test.py`) and YOLO training (`yolo.py`) |
-| `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata/cell patches/QC renders/per-page labels (`data/`, including the ground-truth patch set under `data/table_patches/`), the datasets (`datasets/digits/` character crops, `datasets/tables/` full-page table regions), model weights (`models/`), Ultralytics training runs (`runs/`) |
+| `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata/cell patches/QC renders/per-page labels (`data/`, including the ground-truth patch set under `data/table_patches/` and the re-cropped per-patch labels under `data/v2_patches/labels/`), the datasets (`datasets/digits/` character crops, `datasets/tables/` full-page table regions), model weights (`models/`), Ultralytics training runs (`runs/`) |
 
 Pipeline scripts under `scripts/`:
 
@@ -82,6 +87,7 @@ Pipeline scripts under `scripts/`:
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
 | `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |
 | `recombine_labels.py` | map the per-patch labels back onto the page with the saved `table_grid.json` geometry, one YOLO label file per page, plus one `<source-id>.empty.json` sidecar per page recording the cell regions annotated as empty |
+| `crop_page_labels.py` | map the per-page labels back onto a patch set's cell crops (the inverse of `recombine_labels.py`), one YOLO label file per patch under `data/v2_patches/labels`, with confirmed-empty patches re-derived from the `<source-id>.empty.json` sidecars |
 
 For the annotation data layout and labeler details, see
 [`tools/labeler/README.md`](tools/labeler/README.md).

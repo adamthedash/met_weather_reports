@@ -24,6 +24,10 @@ audit model dataset="datasets/digits" conf="0.25" batch="32":
 recombine:
     pixi run python scripts/recombine_labels.py
 
+# re-crop the per-page labels onto a patch set's exported cell crops
+crop-labels:
+    pixi run python scripts/crop_page_labels.py
+
 # combined labeler tool (tools/labeler): build the frontend and serve
 labeler dataset="datasets/digits": labeler-build
     pixi run python -m tools.labeler --dataset {{dataset}}
