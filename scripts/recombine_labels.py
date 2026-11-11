@@ -11,10 +11,10 @@ see ``tools/labeler/README.md``) the script maps each labeled character box
 from its cell crop back onto the page and writes one per-page YOLO label file
 ``<out>/<source-id>.txt`` (by default ``data/page_labels``).
 
-The mapping is the reassembly ``scripts/preprocess_pages.py`` saved the
-geometry for: ``<qc>/<source-id>/grid.json`` records, per exported patch, the
-exact page-space rectangle the patch was cropped from (``cells[].rect``, with
-``cells[].file`` naming the patch), the fitted grid geometry the patch's cell
+The mapping is the reassembly ``scripts/preprocess_table_patches.py`` saved the
+geometry for: ``<qc>/<source-id>/table_grid.json`` records, per exported patch,
+the exact page-space rectangle the patch was cropped from (``cells[].rect``,
+with ``cells[].file`` naming the patch), the grid geometry the patch's cell
 sits in (``spacing_x`` / ``spacing_y`` and the kept ``columns`` / ``rows``
 grid lines) and the page image size (``image.width_px`` / ``image.height_px``).
 A patch-normalised box is scaled by the crop rectangle and normalised by the
@@ -33,11 +33,12 @@ every ``<out>/<source-id>.txt`` the script writes
 ``<out>/<source-id>.empty.json`` holding one record per confirmed-empty grid
 cell: the cell's nominal table-cell rectangle (not the padded crop) in
 normalised page coordinates at six decimals (``cx``/``cy``/``w``/``h``, the
-annotation tool's ``Box`` fields minus ``cls``), in ``grid.json`` ``cells``
-order. The cell rectangle is the ``scripts/preprocess_pages.py``
-``build_grid_boxes`` geometry -- centred on the kept grid line intersection
-the cell's ``col``/``row`` name, sized ``spacing_x x spacing_y`` -- mapped
-exactly like the boxes, never clamped to the page. A region absent from the
+annotation tool's ``Box`` fields minus ``cls``), in ``table_grid.json``
+``cells`` order. The cell rectangle is the
+``scripts/preprocess_table_patches.py`` ``build_nominal_cells`` geometry --
+centred on the kept grid line intersection the cell's ``col``/``row`` name,
+sized ``spacing_x x spacing_y`` -- mapped exactly like the boxes, never clamped
+to the page. A region absent from the
 sidecar is unannotated (unknown), never assumed empty; an empty ``empty``
 list explicitly says the page has no confirmed-empty cell. No class is
 involved and the class set is untouched. The sidecar is written for every
@@ -45,15 +46,15 @@ recombined source, also one with zero empty regions, so the output file set
 mirrors the labels one-to-one.
 
 Neighbouring patches overlap (every crop is padded by ``EXPAND`` in
-``scripts/preprocess_pages.py``), so one character can be labeled on two
-patches. Such near-duplicate boxes are kept as labeled -- the per-page file
+``scripts/preprocess_table_patches.py``), so one character can be labeled on
+two patches. Such near-duplicate boxes are kept as labeled -- the per-page file
 mirrors the annotations, it does not clean them -- but the duplicate pairs
 (same class, different patches, IoU >= ``MIN_IOU``, paired greedily by
 descending IoU as in ``tools/labeler/compare.py``) are counted in the log and
 run summary so the overlap stays visible.
 
 One run recombines every source under ``--labels``. A source whose labels
-cannot be recombined (missing or malformed ``grid.json``, a label file
+cannot be recombined (missing or malformed ``table_grid.json``, a label file
 mirroring no grid cell, a malformed label line, a class id outside the
 ``--data-yaml`` class set) fails as a whole and gets no output files (neither
 the page label file nor the sidecar): it is
@@ -90,9 +91,13 @@ if TYPE_CHECKING:
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LABELS_DIR = REPO_ROOT / "datasets" / "digits" / "labels"
-DEFAULT_QC_DIR = REPO_ROOT / "data" / "qc"
+DEFAULT_QC_DIR = REPO_ROOT / "data" / "table_patches" / "qc"
 DEFAULT_OUT_DIR = REPO_ROOT / "data" / "page_labels"
 DEFAULT_DATA_YAML = REPO_ROOT / "datasets" / "digits" / "data.yaml"
+
+# The per-page geometry written by ``scripts/preprocess_table_patches.py``.
+# Same schema as the detector pipeline's ``grid.json``, different filename.
+GRID_FILENAME = "table_grid.json"
 
 # Overlap at which two same-class boxes count as one character labeled on two
 # patches. Same contract as ``tools/labeler/compare.py:MIN_IOU``.
@@ -132,7 +137,7 @@ class Rect(TypedDict):
 
 
 class GridLine(TypedDict):
-    """One kept grid line of ``grid.json``.
+    """One kept grid line of ``table_grid.json``.
 
     A subset of ``scripts/preprocess_pages.py:GridLine``: the line's grid
     index (the ``col``/``row`` cell-naming convention) and its page-pixel
@@ -144,7 +149,7 @@ class GridLine(TypedDict):
 
 
 class GridImage(TypedDict):
-    """The page-image block of ``grid.json`` consumed by the reassembly.
+    """The page-image block of ``table_grid.json`` consumed by the reassembly.
 
     A subset of ``scripts/preprocess_pages.py:GridImage``: only the page
     dimensions are needed to normalise the mapped boxes and the empty
@@ -156,7 +161,7 @@ class GridImage(TypedDict):
 
 
 class GridCell(TypedDict):
-    """One exported patch entry of ``grid.json``.
+    """One exported patch entry of ``table_grid.json``.
 
     The fields of ``scripts/preprocess_pages.py:GridCell`` the reassembly
     consumes: which patch the entry describes and the page-space rectangle it
@@ -171,7 +176,7 @@ class GridCell(TypedDict):
 
 
 class GridMetadata(TypedDict):
-    """The subset of a ``grid.json`` table-fitting result the reassembly consumes.
+    """The subset of a ``table_grid.json`` grid-geometry result the reassembly consumes.
 
     The same document as ``scripts/preprocess_pages.py:GridMetadata``. The
     fitted grid geometry (phase, grid line residuals) plays no part in
@@ -399,7 +404,7 @@ def parse_label_file(path: Path, n_classes: int) -> list[Box]:
 
 
 def parse_grid_lines(path: Path, name: str, raw: object) -> list[GridLine]:
-    """Strictly parse one ``grid.json`` axis's kept grid lines.
+    """Strictly parse one ``table_grid.json`` axis's kept grid lines.
 
     Each entry is a ``GridLine``: an integer ``index`` (grid line index ``k``,
     the cell ``col``/``row`` naming convention) and a finite numeric
@@ -408,7 +413,7 @@ def parse_grid_lines(path: Path, name: str, raw: object) -> list[GridLine]:
     and indices are unique per axis so one cell name resolves to one line.
 
     Args:
-        path: The ``grid.json`` being parsed (for error messages).
+        path: The ``table_grid.json`` being parsed (for error messages).
         name: The axis's field name (``columns`` or ``rows``).
         raw: The field's raw JSON value.
 
@@ -443,7 +448,7 @@ def parse_grid_lines(path: Path, name: str, raw: object) -> list[GridLine]:
 
 
 def load_grid_metadata(path: Path) -> GridMetadata:
-    """Read one page's ``grid.json`` and validate the fields reassembly consumes.
+    """Read one page's ``table_grid.json`` and validate the fields reassembly consumes.
 
     Validates the ``GridMetadata`` subset this script maps through: a
     ``source_id``, a page size with positive dimensions, positive
@@ -452,10 +457,10 @@ def load_grid_metadata(path: Path) -> GridMetadata:
     non-empty ``cells`` list whose entries carry an integer ``row``/``col``
     naming a kept grid line, a bare patch ``file`` name, and a well-formed
     crop ``rect`` -- all unique per page, so one label file maps to exactly
-    one grid cell. The rest of the table-fitting result is ignored.
+    one grid cell. The rest of the grid geometry is ignored.
 
     Args:
-        path: The page's ``grid.json``.
+        path: The page's ``table_grid.json``.
 
     Returns:
         The page's consumed grid metadata.
@@ -467,7 +472,7 @@ def load_grid_metadata(path: Path) -> GridMetadata:
             ``row``/``col`` matches no kept grid line).
     """
     if not path.is_file():
-        raise ValueError(f"grid.json not found: {path}")
+        raise ValueError(f"{GRID_FILENAME} not found: {path}")
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -590,7 +595,7 @@ def write_empty_regions(path: Path, source_id: str, rects: Sequence[Rect]) -> No
     ...]}``, pretty-printed with a trailing newline as in
     ``scripts/preprocess_pages.py:write_grid_json``. Region values are
     normalised page coordinates rounded to six decimals (the label contract's
-    precision); records keep the caller's ``grid.json`` ``cells`` order. Any
+    precision); records keep the caller's ``table_grid.json`` ``cells`` order. Any
     existing file is overwritten.
 
     Args:
@@ -634,7 +639,7 @@ def map_box_to_page(
     Args:
         box: The label box in patch-normalised coordinates.
         rect: The patch's crop rectangle ``[left, upper, right, lower]`` in
-            page pixels (``grid.json``'s ``cells[].rect``).
+            page pixels (``table_grid.json``'s ``cells[].rect``).
         width_px: Page image width in pixels.
         height_px: Page image height in pixels.
 
@@ -661,7 +666,7 @@ def grid_line_position(lines: Sequence[GridLine], index: int, name: str) -> floa
     """Look up one kept grid line's page-pixel position by its grid index.
 
     Args:
-        lines: One axis's kept grid lines (``grid.json`` ``columns`` or
+        lines: One axis's kept grid lines (``table_grid.json`` ``columns`` or
             ``rows``).
         index: The grid line index to find (a cell's ``col`` or ``row``).
         name: The cell field's name, for the error message.
@@ -832,7 +837,7 @@ def process_source(
 ) -> SourceSummary:
     """Recombine one page's per-patch labels into its per-page label file.
 
-    Loads ``<qc>/<source-id>/grid.json``, maps every labeled box of every
+    Loads ``<qc>/<source-id>/table_grid.json``, maps every labeled box of every
     exported patch back onto the page and writes ``<out>/<source-id>.txt``
     plus the empty-region sidecar ``<out>/<source-id>.empty.json`` (the
     nominal cell rectangles of the patches whose label file is empty).
@@ -845,7 +850,7 @@ def process_source(
         source_id: The page's id (its ``<source-id>`` folder name).
         label_files: The source's label files; every one must mirror a grid
             cell.
-        qc_root: Root of the ``qc/`` tree holding ``<source-id>/grid.json``.
+        qc_root: Root of the ``qc/`` tree holding ``<source-id>/table_grid.json``.
         out_dir: Output root for the per-page label files.
         n_classes: Size of the dataset's class set (``data.yaml``).
 
@@ -853,13 +858,13 @@ def process_source(
         The source's ``SourceSummary``.
 
     Raises:
-        ValueError: If ``grid.json`` is missing or invalid, a label file is
+        ValueError: If ``table_grid.json`` is missing or invalid, a label file is
             malformed or holds an out-of-range class id, or a label file
             mirrors no grid cell.
         OSError: If a file cannot be read or written.
     """
     logger.debug("processing %s", source_id)
-    metadata = load_grid_metadata(qc_root / source_id / "grid.json")
+    metadata = load_grid_metadata(qc_root / source_id / GRID_FILENAME)
     by_stem = {path.stem: path for path in label_files}
 
     placed: list[PlacedBox] = []
@@ -931,7 +936,7 @@ def parse_args() -> argparse.Namespace:
         "--qc",
         type=Path,
         default=DEFAULT_QC_DIR,
-        help="root of the qc/ tree holding <source-id>/grid.json (default: %(default)s)",
+        help="root of the qc/ tree holding <source-id>/table_grid.json (default: %(default)s)",
     )
     parser.add_argument(
         "--out",
