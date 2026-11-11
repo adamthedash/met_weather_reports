@@ -11,7 +11,10 @@ the page's YOLO table-region labels, takes the single ``daily`` box and cuts
 the page into the guaranteed 12 x 31 grid of equal-sized cells. Patches are
 written to ``<out>/patches/<source-id>/<row>_<col>.png`` (by default
 ``data/table_patches/patches``) and the daily grid's geometry to
-``<out>/qc/<source-id>/table_grid.json``.
+``<out>/qc/<source-id>/table_grid.json``. A QC render,
+``<out>/qc/<source-id>/grid_overlay.jpg``, draws the day x month cell
+boundaries and the ``daily`` box on the page so the division can be checked
+by eye against the printed table.
 
 The ``daily`` box spans 12 month columns (January left to December right) and
 31 day rows (day 1 top to day 31 bottom), so ``row`` is ``day - 1`` and ``col``
@@ -66,7 +69,7 @@ from typing import NamedTuple, TypedDict
 import yaml
 import yaml.constructor
 import yaml.resolver
-from PIL import Image
+from PIL import Image, ImageDraw
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET_DIR = REPO_ROOT / "datasets" / "tables"
@@ -83,6 +86,15 @@ EXPAND = 0.1
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
 GRID_FILENAME = "table_grid.json"
+OVERLAY_FILENAME = "grid_overlay.jpg"
+
+# QC render styling: red cell boundaries, a heavier blue outline for the
+# hand-drawn daily box, and a quality high enough to judge alignment.
+GRID_LINE_COLOUR = (255, 0, 0)
+DAILY_BOX_COLOUR = (0, 102, 255)
+GRID_LINE_WIDTH = 2
+DAILY_BOX_WIDTH = 4
+OVERLAY_JPEG_QUALITY = 90
 
 logger = logging.getLogger(__name__)
 
@@ -664,6 +676,91 @@ def write_grid_metadata(metadata: GridMetadata, path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# QC renders
+
+
+def clip_pixel(value: float, limit: int) -> int:
+    """Round a page coordinate to the nearest drawable pixel.
+
+    Page coordinates can fall just outside the bitmap (a hand-drawn box that
+    touches or slightly overshoots the page edge), and JPEG drawing must stay
+    inside the canvas, so the rounded value is clamped to
+    ``0 .. limit - 1``.
+
+    Args:
+        value: Coordinate in page pixels.
+        limit: Canvas extent in pixels along this axis.
+
+    Returns:
+        The nearest pixel index, clamped to the canvas.
+    """
+    return min(max(round(value), 0), limit - 1)
+
+
+def render_grid_overlay(
+    image_path: Path,
+    bounds: tuple[float, float, float, float],
+    out_path: Path,
+) -> None:
+    """Draw the daily grid's cell boundaries on the page (``grid_overlay.jpg``).
+
+    The page is rendered at native resolution with one red line per cell
+    boundary of the 12 x 31 grid -- the 11 internal vertical and 30 internal
+    horizontal dividers plus the outer edge -- and the hand-drawn ``daily``
+    box outlined in blue. Lines are placed at the same pixel coordinates the
+    patches are cut from, so the render shows exactly the division in use and
+    lets the box be checked against the printed table by eye.
+
+    Args:
+        image_path: Page image to render.
+        bounds: ``(x1, y1, x2, y2)`` of the ``daily`` box in page pixels.
+        out_path: Destination ``.jpg`` path; the parent directory is created.
+
+    Raises:
+        OSError: If the page image cannot be read or the overlay cannot be
+            written.
+    """
+    x1, y1, x2, y2 = bounds
+    cell_w = (x2 - x1) / DAILY_COLS
+    cell_h = (y2 - y1) / DAILY_ROWS
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with Image.open(image_path) as img:
+        overlay = img.convert("RGB")
+    width, height = overlay.size
+    draw = ImageDraw.Draw(overlay)
+
+    # Vertical dividers span the daily box's height, horizontal ones its width,
+    # so the lines describe the table region rather than the whole page.
+    for col in range(DAILY_COLS + 1):
+        x = clip_pixel(x1 + col * cell_w, width)
+        draw.line(
+            [(x, clip_pixel(y1, height)), (x, clip_pixel(y2, height))],
+            fill=GRID_LINE_COLOUR,
+            width=GRID_LINE_WIDTH,
+        )
+    for row in range(DAILY_ROWS + 1):
+        y = clip_pixel(y1 + row * cell_h, height)
+        draw.line(
+            [(clip_pixel(x1, width), y), (clip_pixel(x2, width), y)],
+            fill=GRID_LINE_COLOUR,
+            width=GRID_LINE_WIDTH,
+        )
+
+    draw.rectangle(
+        (
+            clip_pixel(x1, width),
+            clip_pixel(y1, height),
+            clip_pixel(x2, width),
+            clip_pixel(y2, height),
+        ),
+        outline=DAILY_BOX_COLOUR,
+        width=DAILY_BOX_WIDTH,
+    )
+    overlay.save(out_path, format="JPEG", quality=OVERLAY_JPEG_QUALITY)
+
+
+# ---------------------------------------------------------------------------
 # pipeline
 
 
@@ -677,9 +774,11 @@ def process_page(
 ) -> PageSummary:
     """Cut one page's daily-table cells and write its grid geometry.
 
-    Writes ``<patches>/<source-id>/<row>_<col>.png`` and
-    ``<qc>/<source-id>/table_grid.json``; the geometry is written after the
-    patches, so it always describes the patch set on disk.
+    Writes ``<patches>/<source-id>/<row>_<col>.png``,
+    ``<qc>/<source-id>/table_grid.json`` and ``<qc>/<source-id>/grid_overlay.jpg``;
+    the geometry is written after the patches, so it always describes the patch
+    set on disk, and the QC render is written last, so its presence means the
+    page completed.
 
     Args:
         image_path: Page image to process.
@@ -733,6 +832,10 @@ def process_page(
     grid_path = qc_root / source_id / GRID_FILENAME
     write_grid_metadata(metadata, grid_path)
     logger.debug("%s: wrote %s", source_id, repo_relative(grid_path))
+
+    overlay_path = qc_root / source_id / OVERLAY_FILENAME
+    render_grid_overlay(image_path, bounds, overlay_path)
+    logger.debug("%s: wrote %s", source_id, repo_relative(overlay_path))
     return PageSummary(source_id=source_id, n_patches=len(patches))
 
 
