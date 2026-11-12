@@ -35,7 +35,9 @@ an annotated character-detection dataset:
    grid geometry saved in step 2, one YOLO label file per page plus a
    per-page sidecar recording the confirmed-empty cell regions
    (`scripts/recombine_labels.py`; it reads the ground-truth pipeline's
-   `table_grid.json`).
+   `table_grid.json`). A character labeled on two overlapping crops maps back
+   onto two near-identical boxes; same-class pairs from different patches
+   overlapping at least 80% are merged into their enclosing bounding box.
 6. **Re-crop** the per-page labels back into per-patch labels when the patch
    cropping changes, so the annotations follow the new crops instead of being
    re-done (`scripts/crop_page_labels.py`; it reads the same `table_grid.json`
@@ -88,7 +90,7 @@ Pipeline scripts under `scripts/`:
 | `prepare_dataset.py` | write the YOLO train/val split files |
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
 | `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |
-| `recombine_labels.py` | map the per-patch labels back onto the page with the saved `table_grid.json` geometry, one YOLO label file per page, plus one `<source-id>.empty.json` sidecar per page recording the cell regions annotated as empty |
+| `recombine_labels.py` | map the per-patch labels back onto the page with the saved `table_grid.json` geometry, one YOLO label file per page (same-class boxes from different patches overlapping at least 80% are merged into their enclosing box), plus one `<source-id>.empty.json` sidecar per page recording the cell regions annotated as empty |
 | `crop_page_labels.py` | map the per-page labels back onto a patch set's cell crops (the inverse of `recombine_labels.py`), one YOLO label file per patch under `data/v2_patches/labels`, with confirmed-empty patches re-derived from the `<source-id>.empty.json` sidecars; patch copies retaining less than `--min-retained-area` (default 0.5) of the box's original area are omitted, and a patch holding only such fragments stays unlabeled |
 
 For the annotation data layout and labeler details, see

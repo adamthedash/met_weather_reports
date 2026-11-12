@@ -47,11 +47,17 @@ mirrors the labels one-to-one.
 
 Neighbouring patches overlap (every crop is padded by ``EXPAND`` in
 ``scripts/preprocess_table_patches.py``), so one character can be labeled on
-two patches. Such near-duplicate boxes are kept as labeled -- the per-page file
-mirrors the annotations, it does not clean them -- but the duplicate pairs
-(same class, different patches, IoU >= ``MIN_IOU``, paired greedily by
-descending IoU as in ``tools/labeler/compare.py``) are counted in the log and
-run summary so the overlap stays visible.
+two patches and maps back onto two near-identical page boxes. Once all of a
+page's boxes are collated such duplicates are merged: a same-class pair from
+different patches overlapping at least ``MERGE_IOU`` is replaced by its
+enclosing bounding box (the outermost edges of the two), pairing greedily by
+descending IoU with each box taken at most once. That is a single pass, so a
+chain of three copies of one character merges one pair and leaves the third
+box in place. A merged box keeps the class id and the earlier box's output
+position and is never clamped to the page. Two same-class boxes labeled on the
+same patch are two annotations, not two copies, and are never merged. The
+number of merges is counted in the log and run summary so the overlap stays
+visible; a page without qualifying pairs is written as labeled.
 
 One run recombines every source under ``--labels``. A source whose labels
 cannot be recombined (missing or malformed ``table_grid.json``, a label file
@@ -99,9 +105,9 @@ DEFAULT_DATA_YAML = REPO_ROOT / "datasets" / "digits" / "data.yaml"
 # Same schema as the detector pipeline's ``grid.json``, different filename.
 GRID_FILENAME = "table_grid.json"
 
-# Overlap at which two same-class boxes count as one character labeled on two
-# patches. Same contract as ``tools/labeler/compare.py:MIN_IOU``.
-MIN_IOU = 0.5
+# Overlap at which two same-class boxes from different patches count as one
+# character labeled on two patches and are merged into their enclosing box.
+MERGE_IOU = 0.8
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
@@ -197,7 +203,7 @@ class GridMetadata(TypedDict):
 class PlacedBox(NamedTuple):
     """One recombined box: its page-space box and the patch it was labeled on.
 
-    The patch identity lets :func:`count_duplicate_pairs` tell apart the
+    The patch identity lets :func:`merge_duplicate_boxes` tell apart the
     genuine several-characters-per-patch case from one character labeled on
     two overlapping patches.
     """
@@ -215,7 +221,7 @@ class SourceSummary(NamedTuple):
     n_empty: int  # patches whose label file is empty/ignored (sidecar regions)
     n_unlabeled: int  # patches without a label file
     n_boxes: int  # boxes written to the page label file
-    n_dups: int  # near-duplicate cross-patch box pairs (kept, counted)
+    n_merged: int  # near-duplicate cross-patch boxes merged away
 
 
 # ---------------------------------------------------------------------------
@@ -748,15 +754,62 @@ def iou(a: Box, b: Box) -> float:
     return inter / union if union > 0.0 else 0.0
 
 
-def count_duplicate_pairs(placed: Sequence[PlacedBox], min_iou: float = MIN_IOU) -> int:
-    """Count the near-duplicate box pairs a page's overlapping patches produced.
+def enclosing_box(a: Box, b: Box) -> Box:
+    """Return the smallest box enclosing two same-class page boxes.
+
+    The merged box spans the outermost edges of the pair -- the edge-wise
+    minimum and maximum of the two boxes' bounds -- and keeps their shared
+    class id. Like :func:`map_box_to_page` the result is not clamped to the
+    page.
+
+    Args:
+        a: First box (``cls``, ``cx``, ``cy``, ``w``, ``h``).
+        b: Second box, with the same class as `a`.
+
+    Returns:
+        The enclosing box in page-normalised coordinates.
+    """
+    ax1 = a["cx"] - a["w"] / 2
+    ay1 = a["cy"] - a["h"] / 2
+    ax2 = a["cx"] + a["w"] / 2
+    ay2 = a["cy"] + a["h"] / 2
+    bx1 = b["cx"] - b["w"] / 2
+    by1 = b["cy"] - b["h"] / 2
+    bx2 = b["cx"] + b["w"] / 2
+    by2 = b["cy"] + b["h"] / 2
+    x1 = min(ax1, bx1)
+    y1 = min(ay1, by1)
+    x2 = max(ax2, bx2)
+    y2 = max(ay2, by2)
+    return Box(
+        cls=a["cls"],
+        cx=(x1 + x2) / 2.0,
+        cy=(y1 + y2) / 2.0,
+        w=x2 - x1,
+        h=y2 - y1,
+    )
+
+
+def merge_duplicate_boxes(
+    placed: Sequence[PlacedBox], min_iou: float = MERGE_IOU
+) -> tuple[list[PlacedBox], int]:
+    """Merge the duplicate boxes a page's overlapping patches produced.
 
     Neighbouring patches overlap, so one character can be labeled on two
-    patches; those duplicates are kept in the output and only counted here.
-    Two boxes form a duplicate pair when they come from different patches,
-    share a class and overlap at least ``min_iou``; pairs are formed greedily
-    by descending IoU, taking each box at most once (the pairing contract of
-    ``tools/labeler/compare.py``).
+    patches; once every patch's boxes are on the page that character is
+    usually two near-identical boxes. Two boxes are duplicates when they come
+    from different patches, share a class and overlap at least `min_iou`; the
+    pair is replaced by its enclosing box (:func:`enclosing_box`). Pairs are
+    formed greedily by descending IoU, taking each box at most once. That is a
+    single pass: a chain of three copies of one character merges one pair and
+    leaves the third box in place. Two same-class boxes labeled on the same
+    patch are never merged, however much they overlap -- they are two
+    annotations, not two copies of one.
+
+    A merged box sits at the position of the earlier (lower-index) box of its
+    pair and is tagged with that box's patch. The tag only decides duplicate
+    candidacy, which is tested on the unmerged boxes. All other boxes keep
+    their relative order.
 
     Args:
         placed: The page's recombined boxes, each tagged with the patch it
@@ -764,7 +817,9 @@ def count_duplicate_pairs(placed: Sequence[PlacedBox], min_iou: float = MIN_IOU)
         min_iou: Overlap two boxes need to count as one character.
 
     Returns:
-        The number of duplicate pairs formed.
+        ``(boxes, merged)``: the page's boxes with every duplicate pair
+        collapsed into one enclosing box, and the number of merges performed
+        (equivalently, the number of boxes removed).
 
     Raises:
         ValueError: If `min_iou` is outside ``[0, 1]``.
@@ -781,15 +836,30 @@ def count_duplicate_pairs(placed: Sequence[PlacedBox], min_iou: float = MIN_IOU)
             if value >= min_iou:
                 candidates.append((value, i, j))
     candidates.sort(key=lambda t: (-t[0], t[1], t[2]))
+
+    merged_boxes: dict[int, Box] = {}
+    removed: set[int] = set()
     used: set[int] = set()
-    pairs = 0
+    n_merged = 0
     for _, i, j in candidates:
         if i in used or j in used:
             continue
         used.add(i)
         used.add(j)
-        pairs += 1
-    return pairs
+        merged_boxes[i] = enclosing_box(placed[i].box, placed[j].box)
+        removed.add(j)
+        n_merged += 1
+
+    result: list[PlacedBox] = []
+    for index, item in enumerate(placed):
+        if index in removed:
+            continue
+        box = merged_boxes.get(index)
+        if box is None:
+            result.append(item)
+        else:
+            result.append(PlacedBox(patch=item.patch, box=box))
+    return result, n_merged
 
 
 def scan_labels(labels_root: Path) -> tuple[dict[str, list[Path]], list[Path]]:
@@ -838,9 +908,11 @@ def process_source(
     """Recombine one page's per-patch labels into its per-page label file.
 
     Loads ``<qc>/<source-id>/table_grid.json``, maps every labeled box of every
-    exported patch back onto the page and writes ``<out>/<source-id>.txt``
-    plus the empty-region sidecar ``<out>/<source-id>.empty.json`` (the
-    nominal cell rectangles of the patches whose label file is empty).
+    exported patch back onto the page, merges the duplicate boxes the
+    overlapping patches produced (:func:`merge_duplicate_boxes`) and writes
+    ``<out>/<source-id>.txt`` plus the empty-region sidecar
+    ``<out>/<source-id>.empty.json`` (the nominal cell rectangles of the
+    patches whose label file is empty).
     Label files must mirror the grid's patch set one-to-one: a grid cell
     without a label file is an unlabeled patch (skipped and counted), a label
     file without a grid cell is a data inconsistency and fails the whole
@@ -899,7 +971,7 @@ def process_source(
             + ", ".join(sorted(p.name for p in by_stem.values()))
         )
 
-    n_dups = count_duplicate_pairs(placed)
+    placed, n_merged = merge_duplicate_boxes(placed)
     out_path = out_dir / f"{source_id}.txt"
     write_page_labels(out_path, [p.box for p in placed])
     logger.debug("%s: wrote %s", source_id, repo_relative(out_path))
@@ -913,7 +985,7 @@ def process_source(
         n_empty=n_empty,
         n_unlabeled=n_unlabeled,
         n_boxes=len(placed),
-        n_dups=n_dups,
+        n_merged=n_merged,
     )
 
 
@@ -1023,24 +1095,24 @@ def main() -> None:
         summaries.append(summary)
         logger.info(
             "%s: %d patches (%d labeled / %d empty / %d unlabeled), "
-            "%d boxes (%d duplicate pairs)",
+            "%d boxes (%d duplicates merged)",
             summary.source_id,
             summary.n_patches,
             summary.n_labeled,
             summary.n_empty,
             summary.n_unlabeled,
             summary.n_boxes,
-            summary.n_dups,
+            summary.n_merged,
         )
 
     total_boxes = sum(s.n_boxes for s in summaries)
-    total_dups = sum(s.n_dups for s in summaries)
+    total_merged = sum(s.n_merged for s in summaries)
     total_unlabeled = sum(s.n_unlabeled for s in summaries)
     total_empty = sum(s.n_empty for s in summaries)
     run_summary = (
         f"{len(sources)} sources ({n_no_labels} without labels) / "
         f"{len(summaries)} page labels / "
-        f"{total_boxes} boxes ({total_dups} duplicate pairs, "
+        f"{total_boxes} boxes ({total_merged} duplicates merged, "
         f"{total_unlabeled} unlabeled patches, {total_empty} empty patches) "
         f"-> {out_dir} ({len(failed)} failed)"
     )
