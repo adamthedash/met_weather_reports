@@ -17,21 +17,16 @@ with the surrounding pipeline (`scripts/bootstrap_annotations.py`,
 ## Quick start
 
 ```sh
-just labeler                    # pnpm install + vite build, then serve on http://127.0.0.1:8125
+just labeler                    # pnpm install + vite build, then serve on the first free port from 8125
 just labeler datasets/tables    # … against another dataset
 ```
 
-Open the URL in a browser (forward the port first when working over SSH).
-The top bar switches between the stages (`/annotate`, `/review`,
-`/batch-review`, `/audit`, `/summary` deep links).
+Open the URL the server prints (forward the port first when working over SSH).
+The first instance gets `http://127.0.0.1:8125`; launching another dataset in a
+second terminal takes the next free port (8126, 8127, …), so several instances
+run side by side. The top bar switches between the stages (`/annotate`,
+`/review`, `/batch-review`, `/audit`, `/summary` deep links).
 `Ctrl+C` stops the server.
-
-Development, in two terminals:
-
-```sh
-just labeler-api datasets/tables   # uvicorn --reload on 127.0.0.1:8125 (LABELER_DATASET selects the dataset)
-just labeler-ui                    # vite dev server on http://127.0.0.1:5173 (proxies /api)
-```
 
 The tool is dataset-agnostic: it reads classes and presentation from the
 dataset's own `data.yaml`/`classes.yaml` and works over whatever image tree
@@ -48,14 +43,13 @@ the dataset holds. CLI flags (all optional):
 | `--data-yaml` | `<dataset>/data.yaml` | class names (file must exist and parse) |
 | `--class-map` | `classes.yaml` next to `--data-yaml` | class presentation: display glyph + keyboard shortcut per class (file must exist and parse) |
 | `--host` | `127.0.0.1` | bind address |
-| `--port` | `8125` | port |
+| `--port` | first free port from 8125 | omit to scan upward from 8125 on the bind host (so concurrent instances each get their own port); pass a number to pin it exactly (`0` lets the OS pick) |
 | `--dist` | `tools/labeler/frontend/dist` | built frontend directory |
 
 Each root flag overrides the corresponding `--dataset` derivation
 individually, for non-standard layouts. `just labeler <dataset>` passes
-`--dataset` through; `just labeler-api <dataset>` sets the `LABELER_DATASET`
-environment variable (the fallback of `--dataset` itself, there for entry
-points that cannot pass flags).
+`--dataset` through; `--dataset` itself falls back to the `LABELER_DATASET`
+environment variable, for entry points that cannot pass flags.
 
 ## Data layout
 
@@ -443,6 +437,7 @@ On-disk parsing is strict: malformed label or prediction lines are reported
 |---|---|
 | `tools/labeler/app.py` | ASGI app: core `/api` routes, stage routers, built frontend at `/` |
 | `tools/labeler/main.py` | CLI flags, startup summary, uvicorn bootstrap |
+| `tools/labeler/net.py` | port selection: pin `--port`, or bind the first free port from 8125 |
 | `tools/labeler/config.py` | `Config` + the dataset layout derivation (`--dataset` / `LABELER_DATASET`): bind address, dist, dataset roots |
 | `tools/labeler/dataset.py` | `Dataset` + helpers: classes and their presentation, image listing, label/manual-marker/prediction I/O |
 | `tools/labeler/compare.py` | model-vs-label comparison: greedy IoU pairing + disagreement issues |
@@ -498,6 +493,18 @@ stage's 25% empty-prediction sprinkle is its own queue composition
 
 - **Localhost tool, no authentication** — use it through your machine or an
   SSH tunnel; do not expose the port.
+- **Several instances are supported** — omitting `--port` binds the first free
+  port from 8125 on the bind host, so one instance can serve each dataset
+  (`just labeler datasets/digits` and `just labeler datasets/tables` land on
+  8125 and 8126). Nothing stops two instances serving the same dataset
+  directory: writes are last-write-wins, exactly as with two browser tabs.
+  Since `just labeler` rebuilds the frontend first, launch instances
+  sequentially (or run `just labeler-build` once and then
+  `pixi run python -m tools.labeler --dataset …`) to avoid concurrent builds.
+- **Saved view state is per URL** — the annotate crop/zoom/filter and batch
+  scale live in `localStorage`, which the browser scopes to the origin
+  (host:port), so a dataset served on a different port starts with fresh view
+  state. The first instance keeps 8125 and therefore its state.
 - **Axis-aligned boxes only** — YOLO format has no rotation.
 - **Single selection** in the annotate editor; crops hold only a few boxes.
 - **Review, batch review and audit decisions are irreversible** by design

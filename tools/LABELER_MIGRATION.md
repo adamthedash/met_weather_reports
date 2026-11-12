@@ -27,7 +27,7 @@ The labeler currently needs two runtimes to operate (the pixi-managed Python env
 - `tools/labeler/frontend/src/App.svelte` probes `/api/health` for the dataset id, loads `/api/stages`, and routes between workspaces.
 - `src/lib/BoxEditor.svelte` is the imperative canvas engine (draw/move/resize/delete, read-only mode, zoom, chips, badges, reading); `src/lib/Tile.svelte` is the batch grid tile.
 - `src/lib/labels.ts` holds the tunable text sizes and `chipSize`, `drawChip`, `readingOf`; `src/lib/boxes.ts` holds `fitScale`, `handlePoints`, `hitHandle`, `hitBox`, `toNormalized`, `fromNormalized`; `src/lib/palette.ts` holds `classColor`/`classTextColor`; `src/lib/state.ts` namespaces persisted state by dataset id; `src/lib/api.ts` and `types.ts` are the typed client and wire types; `src/stages/registry.ts` maps stage ids to workspaces (annotate, review, batch-review, audit, summary).
-- Build and run: `package.json` pins Svelte 5, Vite 7, TypeScript 5.9; `vite.config.ts` proxies `/api` to port 8125; the `justfile` recipes `labeler`, `labeler-build`, `labeler-api`, `labeler-ui` drive it.
+- Build and run: `package.json` pins Svelte 5, Vite 7, TypeScript 5.9; `vite.config.ts` proxies `/api` to port 8125; the `justfile` recipes `labeler` and `labeler-build` drive it.
 
 ### Contracts that must be preserved
 
@@ -44,7 +44,7 @@ There are no tests for the labeler today (no `def test_` under `tools/`), so the
 ### Deliverable and runtime
 
 - A new workspace `tools/labeler-rs` with three crates: `labeler-core` (no HTTP or UI dependencies), `labeler-server` (binary), `labeler-ui` (WASM app). A committed `Cargo.lock`, `rust-toolchain.toml` pinning stable (MSRV at least 1.89, required by `serde-saphyr`) plus the `wasm32-unknown-unknown` target, and a committed UI build pipeline via `trunk`.
-- `labeler-server` accepts the same flags with the same defaults and env fallback as `tools/labeler/main.py:main` (`LABELER_DATASET`, default `datasets/digits`, `127.0.0.1:8125`). `--dist` remains available to serve a UI build from disk; without it, the release binary serves the embedded `labeler-ui/dist`.
+- `labeler-server` accepts the same flags with the same defaults and env fallback as `tools/labeler/main.py:main` (`LABELER_DATASET`, default `datasets/digits`, host `127.0.0.1`). `--port` follows the Python tool's contract: omitted, it binds the first free port on the host scanning upward from 8125 (so several instances can run at once); given, it pins that exact port and fails clearly when it is in use. `--dist` remains available to serve a UI build from disk; without it, the release binary serves the embedded `labeler-ui/dist`.
 - Startup is strict: a missing images root, unreadable/invalid `data.yaml`, or invalid/mismatched `classes.yaml` aborts with a clear message and a non-zero exit, before binding the port. The same startup summary is printed (dataset, images, labels, classes, keys, done, manual, queue/stale, audit compared/disagreements, stages, asset source).
 - One process, no browser-side build step at runtime; `Ctrl+C` stops cleanly.
 

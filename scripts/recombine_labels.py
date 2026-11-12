@@ -97,8 +97,8 @@ if TYPE_CHECKING:
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LABELS_DIR = REPO_ROOT / "datasets" / "digits" / "labels"
-DEFAULT_QC_DIR = REPO_ROOT / "data" / "table_patches" / "qc"
-DEFAULT_OUT_DIR = REPO_ROOT / "data" / "page_labels"
+DEFAULT_QC_DIR = REPO_ROOT / "data" / "v2_patches" / "qc"
+DEFAULT_OUT_DIR = REPO_ROOT / "data" / "v2_patches" / "page_labels"
 DEFAULT_DATA_YAML = REPO_ROOT / "datasets" / "digits" / "data.yaml"
 
 # The per-page geometry written by ``scripts/preprocess_table_patches.py``.
@@ -334,9 +334,13 @@ def load_classes(yaml_path: Path) -> list[str]:
         try:
             idx = int(key)
         except ValueError as exc:
-            raise ValueError(f"{yaml_path}: names key {key!r} is not an integer") from exc
+            raise ValueError(
+                f"{yaml_path}: names key {key!r} is not an integer"
+            ) from exc
         if isinstance(value, bool) or not isinstance(value, (str, int)):
-            raise ValueError(f"{yaml_path}: names[{key!r}] must be a string, got {type(value).__name__}")
+            raise ValueError(
+                f"{yaml_path}: names[{key!r}] must be a string, got {type(value).__name__}"
+            )
         if idx in names:
             raise ValueError(f"{yaml_path}: duplicate names index {idx}")
         names[idx] = str(value)
@@ -397,7 +401,9 @@ def parse_label_file(path: Path, n_classes: int) -> list[Box]:
             continue
         parts = line.split()
         if len(parts) != 5:
-            raise ValueError(f"{path.name} line {lineno}: expected 5 fields, got {len(parts)}")
+            raise ValueError(
+                f"{path.name} line {lineno}: expected 5 fields, got {len(parts)}"
+            )
         try:
             cls = int(parts[0])
             cx, cy, w, h = (float(v) for v in parts[1:])

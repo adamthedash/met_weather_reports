@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 from pathlib import Path
 
 import uvicorn
@@ -14,6 +15,7 @@ from tools.labeler.config import (
     default_dataset,
     dataset_paths,
 )
+from tools.labeler.net import PORT_START, bind_port
 
 
 def main() -> None:
@@ -78,7 +80,14 @@ def main() -> None:
         "of every class (default: classes.yaml next to --data-yaml)",
     )
     ap.add_argument("--host", default="127.0.0.1", help="bind address")
-    ap.add_argument("--port", type=int, default=8125, help="port")
+    ap.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="port to bind; omitted: the first free port on --host, scanning "
+        f"upward from {PORT_START}, so several instances can run at once "
+        "(0 lets the OS pick an ephemeral port)",
+    )
     ap.add_argument(
         "--dist",
         type=Path,
@@ -91,7 +100,8 @@ def main() -> None:
     roots = dataset_paths(dataset)
     cfg = Config(
         host=args.host,
-        port=args.port,
+        # placeholder until the listener reports the port actually bound
+        port=0,
         dist=args.dist,
         images_root=args.images or roots["images_root"],
         labels_root=args.labels or roots["labels_root"],
@@ -104,11 +114,14 @@ def main() -> None:
     )
     # strict by design: a missing images root or bad data.yaml/classes.yaml
     # aborts startup with a clear error instead of running against a
-    # half-configured dataset
+    # half-configured dataset; the port is bound before anything is printed,
+    # so the summary always names the address actually being served
     try:
         ds = cfg.dataset()
-    except ValueError as exc:
+        listener = bind_port(cfg.host, args.port)
+    except (OSError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
+    cfg = dataclasses.replace(cfg, port=listener.getsockname()[1])
     app = create_app(cfg, ds)
 
     rels = ds.list_images()
@@ -117,7 +130,9 @@ def main() -> None:
     queue, stale = ds.queue_and_stale()
     disagreements, compared = ds.audit_queue()
     dist_built = (cfg.dist / "index.html").is_file()
-    print(f"labeler server: http://{cfg.host}:{cfg.port}")
+    print(f"labeler server: http://{cfg.host}:{cfg.port}", flush=True)
+    if args.port is None:
+        print(f"  port   : {cfg.port} (auto-selected from {PORT_START})")
     print(f"  dataset: {dataset}")
     print(f"  images : {len(rels)} crops under {ds.images_root}")
     print(f"  labels : {ds.labels_root}")
@@ -139,10 +154,15 @@ def main() -> None:
         f"({'built' if dist_built else 'MISSING (run just labeler-build)'})"
     )
     print("open the URL in a browser, Ctrl+C to stop")
+    server = uvicorn.Server(uvicorn.Config(app, host=cfg.host, port=cfg.port))
     try:
-        uvicorn.run(app, host=cfg.host, port=cfg.port)
+        # serve on the socket already bound above: the port cannot be taken
+        # between selection and startup, and the summary stays truthful
+        server.run(sockets=[listener])
     except KeyboardInterrupt:
         print("\nstopped")
+    finally:
+        listener.close()
 
 
 if __name__ == "__main__":
