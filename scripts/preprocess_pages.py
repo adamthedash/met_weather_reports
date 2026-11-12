@@ -3,14 +3,14 @@
 
 Usage:
 
-    pixi run python scripts/preprocess_pages_v2.py
+    pixi run python scripts/preprocess_pages.py
 
 For every labeled page under ``--dataset`` (by default ``datasets/tables``, the
 full-page table dataset curated with the in-repo labeler) the pipeline reads
 the page's YOLO table-region labels, takes the single ``daily`` box and cuts
 the page into the guaranteed 12 x 31 grid of equal-sized cells. Patches are
 written to ``<out>/patches/<source-id>/<row>_<col>.png`` (by default
-``data/table_patches/patches``) and the daily grid's geometry to
+``data/v2_patches/patches``) and the daily grid's geometry to
 ``<out>/qc/<source-id>/table_grid.json``. A QC render,
 ``<out>/qc/<source-id>/grid_overlay.jpg``, draws the day x month cell
 boundaries and the ``daily`` box on the page so the division can be checked
@@ -20,20 +20,19 @@ The ``daily`` box spans 12 month columns (January left to December right) and
 31 day rows (day 1 top to day 31 bottom), so ``row`` is ``day - 1`` and ``col``
 is ``month - 1``. The box is divided evenly: cell ``(row, col)`` is the
 ``1/12`` x ``1/31`` sub-rectangle at that position. Every cell is then cropped
-with ``EXPAND`` of its width/height added on every side (10% per side, the same
-padding as the detector pipeline in ``scripts/preprocess_pages.py``), rounded
+with ``EXPAND`` of its width/height added on every side (10% per side), rounded
 outward and clipped to the page, so neighbouring patches overlap and boundary
 characters are not clipped. The patch naming and geometry expected by
 ``datasets/digits/images`` and ``scripts/recombine_labels.py`` are preserved.
 
-``table_grid.json`` uses the schema of the detector pipeline's ``grid.json``
-(``scripts/preprocess_pages.py:GridMetadata``): the page image, ``spacing_x`` /
-``spacing_y`` (the nominal cell size), the kept grid lines (nominal cell
-centres, indexed 0-11 and 0-30), the first nominal cell centre as the phase,
-and one ``cells`` entry per exported patch with the padded crop rectangle it
-was cut from. ``scripts/recombine_labels.py`` reads it to map per-patch labels
-back onto the page and to record confirmed-empty cells, so the reassembly works
-unchanged apart from the filename.
+``table_grid.json`` records the geometry in the ``GridMetadata`` schema defined
+below: the page image, ``spacing_x`` / ``spacing_y`` (the nominal cell size),
+the kept grid lines (nominal cell centres, indexed 0-11 and 0-30), the first
+nominal cell centre as the phase, and one ``cells`` entry per exported patch
+with the padded crop rectangle it was cut from. ``scripts/recombine_labels.py``
+reads it to map per-patch labels back onto the page and to record
+confirmed-empty cells; ``scripts/crop_page_labels.py`` reads it for the inverse
+mapping.
 
 Page handling follows the other pipeline scripts. Pages without a label file
 are skipped and counted. A labelled page fails when its label file is malformed,
@@ -73,7 +72,7 @@ from PIL import Image, ImageDraw
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET_DIR = REPO_ROOT / "datasets" / "tables"
-DEFAULT_OUT_DIR = REPO_ROOT / "data" / "table_patches"
+DEFAULT_OUT_DIR = REPO_ROOT / "data" / "v2_patches"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
 # The dataset's daily table is a fixed month x day grid: 12 month columns and
@@ -136,11 +135,11 @@ class GridCell(TypedDict):
 class GridMetadata(TypedDict):
     """Schema of a ``<out>/qc/<source-id>/table_grid.json`` file.
 
-    The same document as the detector pipeline's ``GridMetadata`` in
-    ``scripts/preprocess_pages.py``. All coordinates are page pixels; ``cells``
-    is in export order (row-major, matching ``patches/<source-id>/``).
-    ``phase`` is the first nominal cell centre so the kept line indices are the
-    0-based cell indices.
+    All coordinates are page pixels; ``cells`` is in export order (row-major,
+    matching ``patches/<source-id>/``). ``phase`` is the first nominal cell
+    centre so the kept line indices are the 0-based cell indices.
+    ``scripts/recombine_labels.py`` and ``scripts/crop_page_labels.py`` read
+    this document to map labels between page and patch space.
     """
 
     source_id: str
@@ -191,8 +190,7 @@ def setup_logging(level_name: str, log_file: Path) -> None:
     """Configure run logging: stderr plus an appended ``log_file``.
 
     Both handlers receive identical records with UTC timestamps; the log file
-    is appended to, so reruns extend the same trail. Same contract as
-    ``scripts/preprocess_pages.py:setup_logging``.
+    is appended to, so reruns extend the same trail.
 
     Args:
         level_name: Logging level name (``DEBUG``..``CRITICAL``). ``DEBUG``,
@@ -547,8 +545,7 @@ def export_cell_patches(
 
     Each cell is expanded by ``expand`` of its width/height on every side,
     rounded outward, clipped to the page, cropped and written to
-    ``out_dir / f"{row}_{col}.png"``. This is the padding contract of
-    ``scripts/preprocess_pages.py:export_cell_patches``.
+    ``out_dir / f"{row}_{col}.png"``.
 
     Args:
         image_path: Page image to crop from.

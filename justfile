@@ -5,12 +5,9 @@ marimo:
 scrape:
     pixi run python scripts/scrape_zooniverse.py --project met-rhonda/irish-weather-rescue --out data --limit 100
 
-preprocess_v1:
-    pixi run python scripts/preprocess_pages_v1.py
-
 # cut daily-table cell patches from the hand-labelled table regions
-preprocess_v2 dataset="datasets/tables" out="data/v2_patches":
-    pixi run python scripts/preprocess_pages_v2.py --dataset {{dataset}} --out {{out}}
+preprocess dataset="datasets/tables" out="data/v2_patches":
+    pixi run python scripts/preprocess_pages.py --dataset {{dataset}} --out {{out}}
 
 prep_dataset dataset="datasets/digits":
     pixi run python scripts/prepare_dataset.py --dataset {{dataset}}

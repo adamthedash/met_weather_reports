@@ -17,12 +17,10 @@ an annotated character-detection dataset:
 1. **Scrape** the page scans and per-subject provenance metadata from the
    Zooniverse project (`scripts/scrape_zooniverse.py`).
 2. **Preprocess** each page into one image per table cell, saving the grid
-   geometry so the patches can be re-assembled after inference. Two paths
-   exist: the detector pipeline contrast-enhances the scan with CLAHE,
-   detects the cells and reconstructs the day × month grid
-   (`scripts/preprocess_pages_v1.py`); the ground-truth path cuts the daily
-   table's guaranteed 12 × 31 equal-cell grid from the hand-drawn `daily`
-   boxes in `datasets/tables` (`scripts/preprocess_pages_v2.py`).
+   geometry so the patches can be re-assembled after inference. The pipeline
+   cuts the daily table's guaranteed 12 × 31 equal-cell grid from the
+   hand-drawn `daily` boxes in `datasets/tables`, writes one patch per cell
+   and saves the grid as `table_grid.json` (`scripts/preprocess_pages.py`).
 3. **Label** the handwritten characters in each cell crop — or any other
    region of a page; the class set and its presentation are defined per
    dataset in its `data.yaml`/`classes.yaml` — with the in-repo labeler app
@@ -34,7 +32,7 @@ an annotated character-detection dataset:
 5. **Recombine** the accepted per-patch labels back onto the pages with the
    grid geometry saved in step 2, one YOLO label file per page plus a
    per-page sidecar recording the confirmed-empty cell regions
-   (`scripts/recombine_labels.py`; it reads the ground-truth pipeline's
+   (`scripts/recombine_labels.py`; it reads the preprocessing pipeline's
    `table_grid.json`). A character labeled on two overlapping crops maps back
    onto two near-identical boxes; same-class pairs from different patches
    overlapping at least 80% are merged into their enclosing bounding box.
@@ -63,7 +61,6 @@ Tools and technologies the pipeline is built on:
   `justfile`)
 - [Ultralytics YOLO](https://docs.ultralytics.com) — detector training and
   inference
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) — table-cell detection
 - [marimo](https://marimo.io) — notebooks
 - [FastAPI](https://fastapi.tiangolo.com) and [Vite](https://vite.dev) /
   [Svelte](https://svelte.dev) — the labeler backend and frontend
@@ -73,20 +70,19 @@ Tools and technologies the pipeline is built on:
 | Entry | Role |
 |---|---|
 | `pixi.toml` / `pixi.lock` | pixi workspace `met_weather`: Python environment and dependencies |
-| `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `preprocess-tables`, `prep_dataset`, `bootstrap`, `audit`, `recombine`, `crop-labels`, `labeler`) and dev servers — the dataset-taking tasks accept a `dataset=` argument (default `datasets/digits`; `preprocess-tables` defaults to `datasets/tables`) |
+| `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `prep_dataset`, `bootstrap`, `audit`, `recombine`, `crop-labels`, `labeler`) and dev servers — the dataset-taking tasks accept a `dataset=` argument (default `datasets/digits`; `preprocess` defaults to `datasets/tables` and writes to `data/v2_patches`) |
 | `scripts/` | the pipeline stages, one script each (see below) |
 | `tools/labeler/` | combined annotation web app (annotate / review / batch review / audit stages, plus a read-only dataset summary page) — details in [`tools/labeler/README.md`](tools/labeler/README.md) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built into `frontend/dist` |
-| `notebooks/` | marimo notebooks: preprocessing prototypes (`preprocess.py`, `test.py`) and YOLO training (`yolo.py`) |
-| `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata/cell patches/QC renders/per-page labels (`data/`, including the ground-truth patch set under `data/table_patches/` and the re-cropped per-patch labels under `data/v2_patches/labels/`), the datasets (`datasets/digits/` character crops, `datasets/tables/` full-page table regions), model weights (`models/`), Ultralytics training runs (`runs/`) |
+| `notebooks/` | marimo notebooks: YOLO training (`yolo.py`) |
+| `data/`, `datasets/`, `models/`, `runs/` | **gitignored, generated** working data: scraped pages/metadata (`data/images`, `data/metadata`), the page patch set with its QC renders and `table_grid.json` geometry, page labels and re-cropped per-patch labels under `data/v2_patches/`, the datasets (`datasets/digits/` character crops, `datasets/tables/` full-page table regions), model weights (`models/`), Ultralytics training runs (`runs/`) |
 
 Pipeline scripts under `scripts/`:
 
 | Script | Role |
 |---|---|
 | `scrape_zooniverse.py` | download page scans and metadata from the Zooniverse project |
-| `preprocess_pages_v1.py` | contrast-enhance each page with CLAHE, detect table cells, reconstruct the grid, crop one image per cell, save the fitted grid geometry for reassembly |
-| `preprocess_pages_v2.py` | cut the daily table's guaranteed 12 × 31 equal-cell grid from the hand-drawn `daily` boxes in `datasets/tables`, crop one image per cell, save `table_grid.json` for reassembly, and render the grid on the page as `qc/<page-id>/grid_overlay.jpg` for visual QC |
+| `preprocess_pages.py` | cut the daily table's guaranteed 12 × 31 equal-cell grid from the hand-drawn `daily` boxes in `datasets/tables`, crop one image per cell, save `table_grid.json` for reassembly, and render the grid on the page as `qc/<page-id>/grid_overlay.jpg` for visual QC |
 | `prepare_dataset.py` | write the YOLO train/val split files |
 | `bootstrap_annotations.py` | model predictions for not-yet-annotated crops outside the manual queue (review queue) |
 | `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |

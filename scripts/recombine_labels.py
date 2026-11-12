@@ -9,9 +9,9 @@ For every ``<source-id>/`` folder of per-patch YOLO labels under ``--labels``
 (by default ``datasets/digits/labels``, the tree the annotation tool writes --
 see ``tools/labeler/README.md``) the script maps each labeled character box
 from its cell crop back onto the page and writes one per-page YOLO label file
-``<out>/<source-id>.txt`` (by default ``data/page_labels``).
+``<out>/<source-id>.txt`` (by default ``data/v2_patches/page_labels``).
 
-The mapping is the reassembly ``scripts/preprocess_table_patches.py`` saved the
+The mapping is the reassembly ``scripts/preprocess_pages.py`` saved the
 geometry for: ``<qc>/<source-id>/table_grid.json`` records, per exported patch,
 the exact page-space rectangle the patch was cropped from (``cells[].rect``,
 with ``cells[].file`` naming the patch), the grid geometry the patch's cell
@@ -35,7 +35,7 @@ cell: the cell's nominal table-cell rectangle (not the padded crop) in
 normalised page coordinates at six decimals (``cx``/``cy``/``w``/``h``, the
 annotation tool's ``Box`` fields minus ``cls``), in ``table_grid.json``
 ``cells`` order. The cell rectangle is the
-``scripts/preprocess_table_patches.py`` ``build_nominal_cells`` geometry --
+``scripts/preprocess_pages.py`` ``build_nominal_cells`` geometry --
 centred on the kept grid line intersection the cell's ``col``/``row`` name,
 sized ``spacing_x x spacing_y`` -- mapped exactly like the boxes, never clamped
 to the page. A region absent from the
@@ -46,7 +46,7 @@ recombined source, also one with zero empty regions, so the output file set
 mirrors the labels one-to-one.
 
 Neighbouring patches overlap (every crop is padded by ``EXPAND`` in
-``scripts/preprocess_table_patches.py``), so one character can be labeled on
+``scripts/preprocess_pages.py``), so one character can be labeled on
 two patches and maps back onto two near-identical page boxes. Once all of a
 page's boxes are collated such duplicates are merged: a same-class pair from
 different patches overlapping at least ``MERGE_IOU`` is replaced by its
@@ -101,8 +101,7 @@ DEFAULT_QC_DIR = REPO_ROOT / "data" / "v2_patches" / "qc"
 DEFAULT_OUT_DIR = REPO_ROOT / "data" / "v2_patches" / "page_labels"
 DEFAULT_DATA_YAML = REPO_ROOT / "datasets" / "digits" / "data.yaml"
 
-# The per-page geometry written by ``scripts/preprocess_table_patches.py``.
-# Same schema as the detector pipeline's ``grid.json``, different filename.
+# The per-page geometry written by ``scripts/preprocess_pages.py``.
 GRID_FILENAME = "table_grid.json"
 
 # Overlap at which two same-class boxes from different patches count as one
@@ -185,10 +184,9 @@ class GridMetadata(TypedDict):
     """The subset of a ``table_grid.json`` grid-geometry result the reassembly consumes.
 
     The same document as ``scripts/preprocess_pages.py:GridMetadata``. The
-    fitted grid geometry (phase, grid line residuals) plays no part in
-    mapping patch boxes back onto the page; ``spacing_x``/``spacing_y`` and
-    the kept ``columns``/``rows`` grid lines anchor the nominal cell
-    rectangles the empty sidecar records.
+    phase and residual fields play no part in mapping patch boxes back onto
+    the page; ``spacing_x``/``spacing_y`` and the kept ``columns``/``rows``
+    grid lines anchor the nominal cell rectangles the empty sidecar records.
     """
 
     source_id: str
@@ -605,7 +603,7 @@ def write_empty_regions(path: Path, source_id: str, rects: Sequence[Rect]) -> No
 
     The document is ``{"source_id": ..., "empty": [{"cx", "cy", "w", "h"},
     ...]}``, pretty-printed with a trailing newline as in
-    ``scripts/preprocess_pages.py:write_grid_json``. Region values are
+    ``scripts/preprocess_pages.py:write_grid_metadata``. Region values are
     normalised page coordinates rounded to six decimals (the label contract's
     precision); records keep the caller's ``table_grid.json`` ``cells`` order. Any
     existing file is overwritten.
@@ -701,7 +699,7 @@ def nominal_cell_rect(cell: GridCell, metadata: GridMetadata) -> Rect:
 
     The cell sits on the kept grid line intersection its ``col``/``row``
     name and spans ``spacing_x x spacing_y``
-    (``scripts/preprocess_pages.py:build_grid_boxes`` geometry), so the
+    (``scripts/preprocess_pages.py:build_nominal_cells`` geometry), so the
     rectangle centres on the kept line's position and the size normalises by
     the page size. Like :func:`map_box_to_page` the mapping is exact: the
     rectangle is never clamped to the page. This is the empty sidecar's

@@ -6,11 +6,12 @@ Usage:
     pixi run python scripts/crop_page_labels.py
 
 For every ``<source-id>.txt`` of page-space YOLO labels under ``--pages`` (by
-default ``data/page_labels``, the tree ``scripts/recombine_labels.py`` writes)
-the script maps each labeled character box down onto the patch crops described
-by ``<qc>/<source-id>/table_grid.json`` (by default ``data/v2_patches/qc``, the
-geometry ``scripts/preprocess_pages_v2.py`` writes) and writes one per-patch
-YOLO label file ``<out>/<source-id>/<row>_<col>.txt`` (by default
+default ``data/v2_patches/page_labels``, the tree
+``scripts/recombine_labels.py`` writes) the script maps each labeled character
+box down onto the patch crops described by ``<qc>/<source-id>/table_grid.json``
+(by default ``data/v2_patches/qc``, the geometry
+``scripts/preprocess_pages.py`` writes) and writes one per-patch YOLO label
+file ``<out>/<source-id>/<row>_<col>.txt`` (by default
 ``data/v2_patches/labels``), named after the patch it mirrors.
 
 The mapping is the inverse of ``scripts/recombine_labels.py:map_box_to_page``:
@@ -89,14 +90,13 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PAGES_DIR = REPO_ROOT / "data" / "v1_patches" / "page_labels"
+DEFAULT_PAGES_DIR = REPO_ROOT / "data" / "v2_patches" / "page_labels"
 DEFAULT_QC_DIR = REPO_ROOT / "data" / "v2_patches" / "qc"
 DEFAULT_PATCHES_DIR = REPO_ROOT / "data" / "v2_patches" / "patches"
 DEFAULT_OUT_DIR = REPO_ROOT / "data" / "v2_patches" / "labels"
 DEFAULT_DATA_YAML = REPO_ROOT / "datasets" / "digits" / "data.yaml"
 
-# The per-page geometry written by ``scripts/preprocess_pages_v2.py``. Same
-# schema as the detector pipeline's ``grid.json``, different filename.
+# The per-page geometry written by ``scripts/preprocess_pages.py``.
 GRID_FILENAME = "table_grid.json"
 
 # Minimum fraction of a page box's original area a patch copy must retain to be
@@ -735,7 +735,7 @@ def nominal_cell_centre(cell: GridCell, metadata: GridMetadata) -> tuple[float, 
 
     The cell sits on the kept grid line intersection its ``col``/``row``
     names, so the centre is that intersection
-    (``scripts/preprocess_pages_v2.py:build_grid_metadata`` geometry). This is
+    (``scripts/preprocess_pages.py:build_grid_metadata`` geometry). This is
     the point the empty marking tests against the page's confirmed-empty
     regions.
 
