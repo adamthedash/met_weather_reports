@@ -25,6 +25,10 @@ recombine:
 crop-labels:
     pixi run python scripts/crop_page_labels.py
 
+# remove cropped duplicate boxes from the per-page labels in place (preview with the script's --dry-run)
+dedupe-labels:
+    pixi run python scripts/dedupe_page_labels.py
+
 # combined labeler tool (tools/labeler): build the frontend and serve
 labeler dataset="datasets/digits": labeler-build
     pixi run python -m tools.labeler --dataset {{dataset}}

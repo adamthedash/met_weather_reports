@@ -70,7 +70,7 @@ Tools and technologies the pipeline is built on:
 | Entry | Role |
 |---|---|
 | `pixi.toml` / `pixi.lock` | pixi workspace `met_weather`: Python environment and dependencies |
-| `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `prep_dataset`, `bootstrap`, `audit`, `recombine`, `crop-labels`, `labeler`) and dev servers — the dataset-taking tasks accept a `dataset=` argument (default `datasets/digits`; `preprocess` defaults to `datasets/tables` and writes to `data/v2_patches`) |
+| `justfile` | task entry points for every pipeline stage (`scrape`, `preprocess`, `prep_dataset`, `bootstrap`, `audit`, `recombine`, `crop-labels`, `dedupe-labels`, `labeler`) and dev servers — the dataset-taking tasks accept a `dataset=` argument (default `datasets/digits`; `preprocess` defaults to `datasets/tables` and writes to `data/v2_patches`) |
 | `scripts/` | the pipeline stages, one script each (see below) |
 | `tools/labeler/` | combined annotation web app (annotate / review / batch review / audit stages, plus a read-only dataset summary page) — details in [`tools/labeler/README.md`](tools/labeler/README.md) |
 | `tools/labeler/frontend/` | Vite + Svelte + TypeScript UI, built into `frontend/dist` |
@@ -88,6 +88,7 @@ Pipeline scripts under `scripts/`:
 | `audit_annotations.py` | model predictions over every annotated crop (one label-audit round) |
 | `recombine_labels.py` | map the per-patch labels back onto the page with the saved `table_grid.json` geometry, one YOLO label file per page (same-class boxes from different patches overlapping at least 80% are merged into their enclosing box), plus one `<source-id>.empty.json` sidecar per page recording the cell regions annotated as empty |
 | `crop_page_labels.py` | map the per-page labels back onto a patch set's cell crops (the inverse of `recombine_labels.py`), one YOLO label file per patch under `data/v2_patches/labels`, with confirmed-empty patches re-derived from the `<source-id>.empty.json` sidecars; patch copies retaining less than `--min-retained-area` (default 0.5) of the box's original area are omitted, and a patch holding only such fragments stays unlabeled |
+| `dedupe_page_labels.py` | remove cropped duplicate boxes from the per-page labels under `data/v2_patches/page_labels` in place: a same-class box lying at least `--min-containment` (default 0.95) inside a larger same-class box is removed as a clipped copy, leaving only the outermost box; files without duplicates are untouched and `--dry-run` reports without writing (re-run after `recombine`) |
 
 For the annotation data layout and labeler details, see
 [`tools/labeler/README.md`](tools/labeler/README.md).
